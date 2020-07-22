@@ -153,11 +153,6 @@ int main(int argc, char** argv)
   int                           cellog_fifo;
   char                          logstr[128];
 
-  if(stat(fifo_file, &sbuf) != 0) {
-		mkfifo(fifo_file, 0666);
-  }
-  cellog_fifo = open(fifo_file, O_WRONLY);
-
   srslte_debug_handle_crash(argc, argv);
 
   parse_args(argc, argv);
@@ -247,9 +242,14 @@ int main(int argc, char** argv)
             exit(-1);
           }
           if (ret == SRSLTE_UE_MIB_FOUND) {
+            if(stat(fifo_file, &sbuf) != 0) {
+                mkfifo(fifo_file, 0666);
+            }
+            cellog_fifo = open(fifo_file, O_WRONLY);
             printf("Found CELL ID %d. %d PRB, %d ports\n", cell.id, cell.nof_prb, cell.nof_ports);
             sprintf(logstr, "[CellInfo]:CID=%d;DL_EARFCN=%d;FREQ=%.1f MHz;POWER=%.1f dBm\n", cell.id, channels[freq].id, channels[freq].fd, srslte_convert_power_to_dB(found_cells[i].peak));
             write(cellog_fifo, logstr, strlen(logstr)+1);
+            close(cellog_fifo);
             if (cell.nof_ports > 0) {
               results[n_found_cells].cell      = cell;
               results[n_found_cells].freq      = channels[freq].fd;
@@ -278,6 +278,5 @@ int main(int argc, char** argv)
 
   srslte_ue_cellsearch_free(&cs);
   srslte_rf_close(&rf);
-  close(cellog_fifo);
   exit(0);
 }
