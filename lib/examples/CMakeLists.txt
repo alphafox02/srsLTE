@@ -75,6 +75,9 @@ endif (ZEROMQ_FOUND)
 
 if(RF_FOUND)
 
+  add_executable(cell_search_modmobmap cell_search_modmobmap.c)
+  target_link_libraries(cell_search_modmobmap srslte_phy srslte_common srslte_rf)
+  
   add_executable(cell_search cell_search.c)
   target_link_libraries(cell_search srslte_phy srslte_common srslte_rf)
 
