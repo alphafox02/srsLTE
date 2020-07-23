@@ -93,6 +93,9 @@ if(RF_FOUND)
   add_executable(cell_search_nbiot cell_search_nbiot.c)
   target_link_libraries(cell_search_nbiot srslte_rf srslte_phy)
 
+  add_executable(cell_search_nbiot_modmobmap cell_search_nbiot_modmobmap.c)
+  target_link_libraries(cell_search_nbiot_modmobmap srslte_rf srslte_phy)
+
   add_executable(usrp_txrx usrp_txrx.c)
   target_link_libraries(usrp_txrx srslte_phy srslte_rf)
 
