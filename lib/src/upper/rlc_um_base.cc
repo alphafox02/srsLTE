@@ -1,14 +1,14 @@
-/*
- * Copyright 2013-2020 Software Radio Systems Limited
+/**
+ * Copyright 2013-2021 Software Radio Systems Limited
  *
- * This file is part of srsLTE.
+ * This file is part of srsRAN.
  *
- * srsLTE is free software: you can redistribute it and/or modify
+ * srsRAN is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
  * published by the Free Software Foundation, either version 3 of
  * the License, or (at your option) any later version.
  *
- * srsLTE is distributed in the hope that it will be useful,
+ * srsRAN is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU Affero General Public License for more details.
@@ -19,24 +19,19 @@
  *
  */
 
-#include "srslte/upper/rlc_um_base.h"
+#include "srsran/upper/rlc_um_base.h"
+#include "srsran/interfaces/ue_rrc_interfaces.h"
 #include <sstream>
 
-namespace srslte {
+namespace srsran {
 
-rlc_um_base::rlc_um_base(srslte::log_ref            log_,
+rlc_um_base::rlc_um_base(srslog::basic_logger&      logger,
                          uint32_t                   lcid_,
                          srsue::pdcp_interface_rlc* pdcp_,
                          srsue::rrc_interface_rlc*  rrc_,
-                         srslte::timer_handler*     timers_) :
-  log(log_),
-  lcid(lcid_),
-  pdcp(pdcp_),
-  rrc(rrc_),
-  timers(timers_),
-  pool(byte_buffer_pool::get_instance())
-{
-}
+                         srsran::timer_handler*     timers_) :
+  logger(logger), lcid(lcid_), pdcp(pdcp_), rrc(rrc_), timers(timers_), pool(byte_buffer_pool::get_instance())
+{}
 
 rlc_um_base::~rlc_um_base() {}
 
@@ -92,30 +87,38 @@ void rlc_um_base::empty_queue()
 /****************************************************************************
  * PDCP interface
  ***************************************************************************/
-void rlc_um_base::write_sdu(unique_byte_buffer_t sdu, bool blocking)
+void rlc_um_base::write_sdu(unique_byte_buffer_t sdu)
 {
   if (not tx_enabled || not tx) {
-    log->debug("%s is currently deactivated. Dropping SDU (%d B)\n", rb_name.c_str(), sdu->N_bytes);
-    metrics.num_dropped_sdus++;
+    logger.debug("%s is currently deactivated. Dropping SDU (%d B)", rb_name.c_str(), sdu->N_bytes);
+    metrics.num_lost_sdus++;
     return;
   }
 
-  if (blocking) {
-    tx->write_sdu(std::move(sdu));
+  int sdu_bytes = sdu->N_bytes; //< Store SDU length for book-keeping
+  if (tx->try_write_sdu(std::move(sdu)) == SRSRAN_SUCCESS) {
+    metrics.num_tx_sdus++;
+    metrics.num_tx_sdu_bytes += sdu_bytes;
   } else {
-    tx->try_write_sdu(std::move(sdu));
+    metrics.num_lost_sdus++;
   }
 }
 
 void rlc_um_base::discard_sdu(uint32_t discard_sn)
 {
   if (not tx_enabled || not tx) {
-    log->debug("%s is currently deactivated. Ignoring SDU discard(SN %u)\n", rb_name.c_str(), discard_sn);
-    metrics.num_dropped_sdus++;
+    logger.debug("%s is currently deactivated. Ignoring SDU discard (SN=%u)", rb_name.c_str(), discard_sn);
     return;
   }
   tx->discard_sdu(discard_sn);
+  metrics.num_lost_sdus++;
 }
+
+bool rlc_um_base::sdu_queue_is_full()
+{
+  return tx->sdu_queue_is_full();
+}
+
 /****************************************************************************
  * MAC interface
  ***************************************************************************/
@@ -140,8 +143,10 @@ int rlc_um_base::read_pdu(uint8_t* payload, uint32_t nof_bytes)
 {
   if (tx && tx_enabled) {
     uint32_t len = tx->build_data_pdu(payload, nof_bytes);
-    metrics.num_tx_bytes += len;
-    metrics.num_tx_pdus++;
+    if (len > 0) {
+      metrics.num_tx_pdu_bytes += len;
+      metrics.num_tx_pdus++;
+    }
     return len;
   }
   return 0;
@@ -151,7 +156,7 @@ void rlc_um_base::write_pdu(uint8_t* payload, uint32_t nof_bytes)
 {
   if (rx && rx_enabled) {
     metrics.num_rx_pdus++;
-    metrics.num_rx_bytes += nof_bytes;
+    metrics.num_rx_pdu_bytes += nof_bytes;
     rx->handle_data_pdu(payload, nof_bytes);
   }
 }
@@ -187,15 +192,14 @@ std::string rlc_um_base::get_rb_name(srsue::rrc_interface_rlc* rrc, uint32_t lci
 
 rlc_um_base::rlc_um_base_rx::rlc_um_base_rx(rlc_um_base* parent_) :
   pool(parent_->pool),
-  log(parent_->log),
+  logger(parent_->logger),
   timers(parent_->timers),
   pdcp(parent_->pdcp),
   rrc(parent_->rrc),
   cfg(parent_->cfg),
   metrics(parent_->metrics),
   lcid(parent_->lcid)
-{
-}
+{}
 
 rlc_um_base::rlc_um_base_rx::~rlc_um_base_rx() {}
 
@@ -203,13 +207,16 @@ rlc_um_base::rlc_um_base_rx::~rlc_um_base_rx() {}
  * Tx subclass implementation (base)
  ***************************************************************************/
 
-rlc_um_base::rlc_um_base_tx::rlc_um_base_tx(rlc_um_base* parent_) : log(parent_->log), pool(parent_->pool) {}
+rlc_um_base::rlc_um_base_tx::rlc_um_base_tx(rlc_um_base* parent_) :
+  logger(parent_->logger), pool(parent_->pool), parent(parent_)
+{}
 
 rlc_um_base::rlc_um_base_tx::~rlc_um_base_tx() {}
 
 void rlc_um_base::rlc_um_base_tx::stop()
 {
   empty_queue();
+  reset();
 }
 
 void rlc_um_base::rlc_um_base_tx::reestablish()
@@ -239,43 +246,50 @@ bool rlc_um_base::rlc_um_base_tx::has_data()
 void rlc_um_base::rlc_um_base_tx::write_sdu(unique_byte_buffer_t sdu)
 {
   if (sdu) {
-    log->info_hex(sdu->msg,
-                  sdu->N_bytes,
-                  "%s Tx SDU (%d B, tx_sdu_queue_len=%d)",
-                  rb_name.c_str(),
-                  sdu->N_bytes,
-                  tx_sdu_queue.size());
+    logger.info(sdu->msg,
+                sdu->N_bytes,
+                "%s Tx SDU (%d B, tx_sdu_queue_len=%d)",
+                rb_name.c_str(),
+                sdu->N_bytes,
+                tx_sdu_queue.size());
     tx_sdu_queue.write(std::move(sdu));
   } else {
-    log->warning("NULL SDU pointer in write_sdu()\n");
+    logger.warning("NULL SDU pointer in write_sdu()");
   }
 }
 
-void rlc_um_base::rlc_um_base_tx::try_write_sdu(unique_byte_buffer_t sdu)
+int rlc_um_base::rlc_um_base_tx::try_write_sdu(unique_byte_buffer_t sdu)
 {
   if (sdu) {
-    uint8_t*                              msg_ptr   = sdu->msg;
-    uint32_t                              nof_bytes = sdu->N_bytes;
-    std::pair<bool, unique_byte_buffer_t> ret       = tx_sdu_queue.try_write(std::move(sdu));
-    if (ret.first) {
-      log->info_hex(
+    uint8_t*                                 msg_ptr   = sdu->msg;
+    uint32_t                                 nof_bytes = sdu->N_bytes;
+    srsran::error_type<unique_byte_buffer_t> ret       = tx_sdu_queue.try_write(std::move(sdu));
+    if (ret) {
+      logger.info(
           msg_ptr, nof_bytes, "%s Tx SDU (%d B, tx_sdu_queue_len=%d)", rb_name.c_str(), nof_bytes, tx_sdu_queue.size());
+      return SRSRAN_SUCCESS;
     } else {
-      log->info_hex(ret.second->msg,
-                    ret.second->N_bytes,
-                    "[Dropped SDU] %s Tx SDU (%d B, tx_sdu_queue_len=%d)",
-                    rb_name.c_str(),
-                    ret.second->N_bytes,
-                    tx_sdu_queue.size());
+      logger.warning(ret.error()->msg,
+                     ret.error()->N_bytes,
+                     "[Dropped SDU] %s Tx SDU (%d B, tx_sdu_queue_len=%d)",
+                     rb_name.c_str(),
+                     ret.error()->N_bytes,
+                     tx_sdu_queue.size());
     }
   } else {
-    log->warning("NULL SDU pointer in write_sdu()\n");
+    logger.warning("NULL SDU pointer in write_sdu()");
   }
+  return SRSRAN_ERROR;
 }
 
 void rlc_um_base::rlc_um_base_tx::discard_sdu(uint32_t discard_sn)
 {
-  log->warning("RLC UM: Discard SDU not implemented yet.\n");
+  logger.warning("RLC UM: Discard SDU not implemented yet.");
+}
+
+bool rlc_um_base::rlc_um_base_tx::sdu_queue_is_full()
+{
+  return tx_sdu_queue.is_full();
 }
 
 int rlc_um_base::rlc_um_base_tx::build_data_pdu(uint8_t* payload, uint32_t nof_bytes)
@@ -283,20 +297,20 @@ int rlc_um_base::rlc_um_base_tx::build_data_pdu(uint8_t* payload, uint32_t nof_b
   unique_byte_buffer_t pdu;
   {
     std::lock_guard<std::mutex> lock(mutex);
-    log->debug("MAC opportunity - %d bytes\n", nof_bytes);
+    logger.debug("MAC opportunity - %d bytes", nof_bytes);
 
-    if (!tx_sdu && tx_sdu_queue.size() == 0) {
-      log->info("No data available to be sent\n");
+    if (tx_sdu == nullptr && tx_sdu_queue.is_empty()) {
+      logger.info("No data available to be sent");
       return 0;
     }
 
-    pdu = allocate_unique_buffer(*pool);
+    pdu = make_byte_buffer();
     if (!pdu || pdu->N_bytes != 0) {
-      log->error("Failed to allocate PDU buffer\n");
+      logger.error("Failed to allocate PDU buffer");
       return 0;
     }
   }
   return build_data_pdu(std::move(pdu), payload, nof_bytes);
 }
 
-} // namespace srslte
+} // namespace srsran

@@ -1,14 +1,14 @@
-/*
- * Copyright 2013-2020 Software Radio Systems Limited
+/**
+ * Copyright 2013-2021 Software Radio Systems Limited
  *
- * This file is part of srsLTE.
+ * This file is part of srsRAN.
  *
- * srsLTE is free software: you can redistribute it and/or modify
+ * srsRAN is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
  * published by the Free Software Foundation, either version 3 of
  * the License, or (at your option) any later version.
  *
- * srsLTE is distributed in the hope that it will be useful,
+ * srsRAN is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU Affero General Public License for more details.
@@ -26,51 +26,65 @@
 #include <map>
 #include <mutex>
 #include <pthread.h>
-#include <srslte/phy/channel/channel.h>
 
 #include "phy_common.h"
 #include "prach.h"
-#include "sf_worker.h"
-#include "srslte/common/log.h"
-#include "srslte/common/thread_pool.h"
-#include "srslte/common/threads.h"
-#include "srslte/common/tti_sync_cv.h"
-#include "srslte/interfaces/radio_interfaces.h"
-#include "srslte/interfaces/ue_interfaces.h"
-#include "srslte/srslte.h"
-
-#include <srsue/hdr/phy/scell/intra_measure.h>
+#include "scell/intra_measure.h"
+#include "scell/scell_sync.h"
+#include "search.h"
+#include "sfn_sync.h"
+#include "srsran/common/thread_pool.h"
+#include "srsran/common/threads.h"
+#include "srsran/common/tti_sync_cv.h"
+#include "srsran/interfaces/radio_interfaces.h"
+#include "srsran/phy/channel/channel.h"
+#include "srsran/srsran.h"
+#include "srsue/hdr/phy/lte/worker_pool.h"
+#include "srsue/hdr/phy/nr/worker_pool.h"
+#include "sync_state.h"
 
 namespace srsue {
 
 typedef _Complex float cf_t;
 
-class sync : public srslte::thread, public chest_feedback_itf
+class sync : public srsran::thread,
+             public rsrp_insync_itf,
+             public search_callback,
+             public scell::sync_callback,
+             public scell::intra_measure::meas_itf
 {
 public:
-  sync() : thread("SYNC"), sf_buffer(sync_nof_rx_subframes){};
+  sync(srslog::basic_logger& phy_logger, srslog::basic_logger& phy_lib_logger) :
+    thread("SYNC"),
+    search_p(phy_logger),
+    sfn_p(phy_logger),
+    phy_logger(phy_logger),
+    phy_lib_logger(phy_lib_logger),
+    sf_buffer(sync_nof_rx_subframes),
+    dummy_buffer(sync_nof_rx_subframes){};
   ~sync();
 
-  void init(srslte::radio_interface_phy* radio_,
+  void init(srsran::radio_interface_phy* radio_,
             stack_interface_phy_lte*     _stack,
             prach*                       prach_buffer,
-            srslte::thread_pool*         _workers_pool,
+            lte::worker_pool*            _lte_workers_pool,
+            nr::worker_pool*             _nr_workers_pool,
             phy_common*                  _worker_com,
-            srslte::log*                 _log_h,
-            srslte::log*                 _log_phy_lib_h,
             uint32_t                     prio,
             int                          sync_cpu_affinity = -1);
   void stop();
   void radio_overflow();
 
   // RRC interface for controling the SYNC state
-  phy_interface_rrc_lte::cell_search_ret_t cell_search(phy_interface_rrc_lte::phy_cell_t* cell);
-  bool                                     cell_select(const phy_interface_rrc_lte::phy_cell_t* cell);
+  bool                                     cell_search_init();
+  rrc_interface_phy_lte::cell_search_ret_t cell_search_start(phy_cell_t* cell);
+  bool                                     cell_select_init(phy_cell_t cell);
+  bool                                     cell_select_start(phy_cell_t cell);
   bool                                     cell_is_camping();
 
   // RRC interface for controlling the neighbour cell measurement
   void set_cells_to_meas(uint32_t earfcn, const std::set<uint32_t>& pci);
-  void set_inter_frequency_measurement(uint32_t cc_idx, uint32_t earfcn_, srslte_cell_t cell_);
+  void set_inter_frequency_measurement(uint32_t cc_idx, uint32_t earfcn_, srsran_cell_t cell_);
   void meas_stop();
 
   // from chest_feedback_itf
@@ -78,7 +92,7 @@ public:
   void out_of_sync() final;
   void set_cfo(float cfo) final;
 
-  void     get_current_cell(srslte_cell_t* cell, uint32_t* earfcn = nullptr);
+  void     get_current_cell(srsran_cell_t* cell, uint32_t* earfcn = nullptr);
   uint32_t get_current_tti();
 
   // From UE configuration
@@ -86,112 +100,142 @@ public:
   void force_freq(float dl_freq, float ul_freq);
 
   // Other functions
-  void set_rx_gain(float gain);
-  int  radio_recv_fnc(srslte::rf_buffer_t&, uint32_t nsamples, srslte_timestamp_t* rx_time);
+  void set_rx_gain(float gain) override;
+  int  radio_recv_fnc(srsran::rf_buffer_t&, srsran_timestamp_t* rx_time) override;
+
+  srsran::radio_interface_phy* get_radio() override { return radio_h; }
+
+  /**
+   * Sets secondary serving cell for synchronization purposes
+   * @param cc_idx component carrier index
+   * @param _cell Cell information
+   */
+  void scell_sync_set(uint32_t cc_idx, const srsran_cell_t& _cell);
+
+  /**
+   * Stops all secondary serving cell synchronization
+   */
+  void scell_sync_stop();
+
+  /**
+   * Implements Secondary Serving cell feedback
+   * @param ch Feedback channel
+   * @param offset Number of samples to offset
+   */
+  void set_rx_channel_offset(uint32_t ch, int32_t offset) override { radio_h->set_channel_rx_offset(ch, offset); }
+
+  // Interface from scell::intra_measure for providing neighbour cell measurements
+  void cell_meas_reset(uint32_t cc_idx) override;
+  void new_cell_meas(uint32_t cc_idx, const std::vector<phy_meas_t>& meas) override;
 
 private:
-  // Class to run cell search
-  class search
-  {
-  public:
-    typedef enum { CELL_NOT_FOUND, CELL_FOUND, ERROR, TIMEOUT } ret_code;
+  void reset();
+  void radio_error();
+  void set_ue_sync_opts(srsran_ue_sync_t* q, float cfo) override;
 
-    ~search();
-    void     init(srslte::rf_buffer_t& buffer_, srslte::log* log_h, uint32_t nof_rx_channels, sync* parent);
-    void     reset();
-    float    get_last_cfo();
-    void     set_agc_enable(bool enable);
-    ret_code run(srslte_cell_t* cell, std::array<uint8_t, SRSLTE_BCH_PAYLOAD_LEN>& bch_payload);
-
-  private:
-    sync*                  p            = nullptr;
-    srslte::log*           log_h        = nullptr;
-    srslte::rf_buffer_t    buffer       = {};
-    srslte_ue_cellsearch_t cs           = {};
-    srslte_ue_mib_sync_t   ue_mib_sync  = {};
-    int                    force_N_id_2 = 0;
-  };
-
-  // Class to synchronize system frame number
-  class sfn_sync
-  {
-  public:
-    typedef enum { IDLE, SFN_FOUND, SFX0_FOUND, SFN_NOFOUND, ERROR } ret_code;
-    sfn_sync() = default;
-    ~sfn_sync();
-    void     init(srslte_ue_sync_t*    ue_sync,
-                  const phy_args_t*    phy_args_,
-                  srslte::rf_buffer_t& buffer,
-                  uint32_t             buffer_max_samples_,
-                  srslte::log*         log_h,
-                  uint32_t             nof_subframes = SFN_SYNC_NOF_SUBFRAMES);
-    void     reset();
-    bool     set_cell(srslte_cell_t cell);
-    ret_code run_subframe(srslte_cell_t*                               cell,
-                          uint32_t*                                    tti_cnt,
-                          std::array<uint8_t, SRSLTE_BCH_PAYLOAD_LEN>& bch_payload,
-                          bool                                         sfidx_only = false);
-    ret_code decode_mib(srslte_cell_t*                               cell,
-                        uint32_t*                                    tti_cnt,
-                        srslte::rf_buffer_t*                         ext_buffer,
-                        std::array<uint8_t, SRSLTE_BCH_PAYLOAD_LEN>& bch_payload,
-                        bool                                         sfidx_only = false);
-
-  private:
-    const static int SFN_SYNC_NOF_SUBFRAMES = 100;
-
-    const phy_args_t*   phy_args           = nullptr;
-    uint32_t            cnt                = 0;
-    uint32_t            timeout            = 0;
-    srslte::log*        log_h              = nullptr;
-    srslte_ue_sync_t*   ue_sync            = nullptr;
-    srslte::rf_buffer_t mib_buffer         = {};
-    uint32_t            buffer_max_samples = 0;
-    srslte_ue_mib_t     ue_mib             = {};
-  };
-
-  /* TODO: Intra-freq measurements can be improved by capturing 200 ms length signal and run cell search +
-   * measurements offline using sync object and finding multiple cells for each N_id_2
+  /**
+   * Search for a cell in the current frequency and go to IDLE.
+   * The function search_p.run() will not return until the search finishes
    */
+  void run_cell_search_state();
 
-  void  reset();
-  void  radio_error();
-  void  set_ue_sync_opts(srslte_ue_sync_t* q, float cfo);
-  void  run_thread() final;
+  /**
+   * SFN synchronization using MIB. run_subframe() receives and processes 1 subframe
+   * and returns
+   */
+  void run_sfn_sync_state();
+
+  /**
+   * Cell camping state. Calls the PHCH workers to process subframes and maintains cell synchronization
+   */
+  void run_camping_state();
+
+  /**
+   * Receives and discards received samples. Does not maintain synchronization
+   */
+  void run_idle_state();
+
+  /**
+   * MAIN THREAD
+   *
+   * The main thread process the SYNC state machine. Every state except IDLE must have exclusive access to
+   * all variables. If any change of cell configuration must be done, the thread must be in IDLE.
+   *
+   * On each state except campling, 1 function is called and the thread jumps to the next state based on the output.
+   *
+   * It has 3 states: Cell search, SFN synchronization, initial measurement and camping.
+   * - CELL_SEARCH:   Initial Cell id and MIB acquisition. Uses 1.92 MHz sampling rate
+   * - CELL_SYNC:     Full sampling rate, uses MIB to obtain SFN. When SFN is obtained, moves to CELL_CAMP
+   * - CELL_CAMP:     Cell camping state. Calls the PHCH workers to process subframes and maintains cell
+   * synchronization.
+   * - IDLE:          Receives and discards received samples. Does not maintain synchronization.
+   *
+   */
+  void run_thread() final;
+
+  /**
+   * Helper method, executed when the UE is camping and in-sync
+   * @param lte_worker Selected LTE worker for the current TTI
+   * @param nr_worker Selected NR worker for the current TTI
+   * @param sync_buffer Sub-frame buffer for the current TTI
+   */
+  void
+  run_camping_in_sync_state(lte::sf_worker* lte_worker, nr::sf_worker* nr_worker, srsran::rf_buffer_t& sync_buffer);
+
+  /**
+   * Helper method, executed in a TTI basis for signaling to the stack a new TTI execution
+   *
+   * The PHY shall not call run_stack_tti when the PHY has reserved a worker.
+   *
+   * Since the sync thread has reserved a worker in camping state, the PHY shall not call the stack in this state.
+   * Otherwise, there is a risk that the stack tries to reserve the same worker for configuration.
+   */
+  void run_stack_tti();
+
   float get_tx_cfo();
 
   void set_sampling_rate();
   bool set_frequency();
   bool set_cell(float cfo);
 
-  bool running               = false;
-  bool is_overflow           = false;
+  bool running     = false;
+  bool is_overflow = false;
 
-  bool forced_rx_time_init = true; // Rx time sync after first receive from radio
+  srsran::rf_timestamp_t last_rx_time;
+  bool                   forced_rx_time_init = true; // Rx time sync after first receive from radio
 
   // Objects for internal use
   search                                              search_p;
   sfn_sync                                            sfn_p;
   std::vector<std::unique_ptr<scell::intra_measure> > intra_freq_meas;
 
-  uint32_t current_sflen     = 0;
-
   // Pointers to other classes
-  stack_interface_phy_lte*     stack            = nullptr;
-  srslte::log*                 log_h            = nullptr;
-  srslte::log*                 log_phy_lib_h    = nullptr;
-  srslte::thread_pool*         workers_pool     = nullptr;
-  srslte::radio_interface_phy* radio_h          = nullptr;
+  stack_interface_phy_lte*     stack = nullptr;
+  srslog::basic_logger&        phy_logger;
+  srslog::basic_logger&        phy_lib_logger;
+  lte::worker_pool*            lte_worker_pool  = nullptr;
+  nr::worker_pool*             nr_worker_pool   = nullptr;
+  srsran::radio_interface_phy* radio_h          = nullptr;
   phy_common*                  worker_com       = nullptr;
   prach*                       prach_buffer     = nullptr;
-  srslte::channel_ptr          channel_emulator = nullptr;
+  srsran::channel_ptr          channel_emulator = nullptr;
+
+  // PRACH state
+  uint32_t prach_nof_sf = 0;
+  uint32_t prach_sf_cnt = 0;
+  cf_t*    prach_ptr    = nullptr;
+  float    prach_power  = 0;
 
   // Object for synchronization of the primary cell
-  srslte_ue_sync_t ue_sync = {};
+  srsran_ue_sync_t ue_sync = {};
+
+  // Object for synchronization secondary serving cells
+  std::map<uint32_t, std::unique_ptr<scell::sync> > scell_sync;
 
   // Buffer for primary and secondary cell samples
   const static uint32_t sync_nof_rx_subframes = 5;
-  srslte::rf_buffer_t   sf_buffer             = {};
+  srsran::rf_buffer_t   sf_buffer             = {};
+  srsran::rf_buffer_t   dummy_buffer;
 
   // Sync metrics
   sync_metrics_t metrics = {};
@@ -200,134 +244,14 @@ private:
   uint32_t out_of_sync_cnt = 0;
   uint32_t in_sync_cnt     = 0;
 
-  // State machine for SYNC thread
-  class sync_state
-  {
-  public:
-    typedef enum {
-      IDLE = 0,
-      CELL_SEARCH,
-      SFN_SYNC,
-      CAMPING,
-    } state_t;
-
-    /* Run_state is called by the main thread at the start of each loop. It updates the state
-     * and returns the current state
-     */
-    state_t run_state()
-    {
-      std::lock_guard<std::mutex> lock(inside);
-      cur_state = next_state;
-      if (state_setting) {
-        state_setting = false;
-        state_running = true;
-      }
-      cvar.notify_all();
-      return cur_state;
-    }
-
-    // Called by the main thread at the end of each state to indicate it has finished.
-    void state_exit(bool exit_ok = true)
-    {
-      std::lock_guard<std::mutex> lock(inside);
-      if (cur_state == SFN_SYNC && exit_ok == true) {
-        next_state = CAMPING;
-      } else {
-        next_state = IDLE;
-      }
-      state_running = false;
-      cvar.notify_all();
-    }
-    void force_sfn_sync()
-    {
-      std::lock_guard<std::mutex> lock(inside);
-      next_state = SFN_SYNC;
-    }
-
-    /* Functions to be called from outside the STM thread to instruct the STM to switch state.
-     * The functions change the state and wait until it has changed it.
-     *
-     * These functions are mutexed and only 1 can be called at a time
-     */
-    void go_idle()
-    {
-      std::lock_guard<std::mutex> lock(outside);
-      go_state(IDLE);
-    }
-    void run_cell_search()
-    {
-      std::lock_guard<std::mutex> lock(outside);
-      go_state(CELL_SEARCH);
-      wait_state_run();
-      wait_state_next();
-    }
-    void run_sfn_sync()
-    {
-      std::lock_guard<std::mutex> lock(outside);
-      go_state(SFN_SYNC);
-      wait_state_run();
-      wait_state_next();
-    }
-
-    /* Helpers below this */
-    bool is_idle() { return cur_state == IDLE; }
-    bool is_camping() { return cur_state == CAMPING; }
-
-    const char* to_string()
-    {
-      switch (cur_state) {
-        case IDLE:
-          return "IDLE";
-        case CELL_SEARCH:
-          return "SEARCH";
-        case SFN_SYNC:
-          return "SYNC";
-        case CAMPING:
-          return "CAMPING";
-        default:
-          return "UNKNOWN";
-      }
-    }
-
-    sync_state() = default;
-
-  private:
-    void go_state(state_t s)
-    {
-      std::unique_lock<std::mutex> ul(inside);
-      next_state    = s;
-      state_setting = true;
-      while (state_setting) {
-        cvar.wait(ul);
-      }
-    }
-
-    /* Waits until there is a call to set_state() and then run_state(). Returns when run_state() returns */
-    void wait_state_run()
-    {
-      std::unique_lock<std::mutex> ul(inside);
-      while (state_running) {
-        cvar.wait(ul);
-      }
-    }
-    void wait_state_next()
-    {
-      std::unique_lock<std::mutex> ul(inside);
-      while (cur_state != next_state) {
-        cvar.wait(ul);
-      }
-    }
-
-    bool                    state_running = false;
-    bool                    state_setting = false;
-    state_t                 cur_state     = IDLE;
-    state_t                 next_state    = IDLE;
-    std::mutex              inside;
-    std::mutex              outside;
-    std::condition_variable cvar;
-  };
-
   std::mutex rrc_mutex;
+  enum {
+    PROC_IDLE = 0,
+    PROC_SELECT_START,
+    PROC_SELECT_RUNNING,
+    PROC_SEARCH_START,
+    PROC_SEARCH_RUNNING
+  } rrc_proc_state = PROC_IDLE;
 
   sync_state phy_state;
 
@@ -338,12 +262,13 @@ private:
   float current_srate                                        = 0;
 
   // This is the primary cell
-  srslte_cell_t                               cell              = {};
-  uint32_t                                    tti               = 0;
-  srslte_timestamp_t                          tti_ts            = {};
-  std::array<uint8_t, SRSLTE_BCH_PAYLOAD_LEN> mib               = {};
+  srsran_cell_t                               cell                   = {};
+  bool                                        force_camping_sfn_sync = false;
+  uint32_t                                    tti                    = 0;
+  srsran_timestamp_t                          stack_tti_ts_new       = {};
+  srsran_timestamp_t                          stack_tti_ts           = {};
+  std::array<uint8_t, SRSRAN_BCH_PAYLOAD_LEN> mib                    = {};
 
-  uint32_t nof_workers             = 0;
   uint32_t nof_rf_channels         = 0;
   float    ul_dl_factor            = NAN;
   int      current_earfcn          = 0;

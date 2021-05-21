@@ -1,14 +1,14 @@
-/*
- * Copyright 2013-2020 Software Radio Systems Limited
+/**
+ * Copyright 2013-2021 Software Radio Systems Limited
  *
- * This file is part of srsLTE.
+ * This file is part of srsRAN.
  *
- * srsLTE is free software: you can redistribute it and/or modify
+ * srsRAN is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
  * published by the Free Software Foundation, either version 3 of
  * the License, or (at your option) any later version.
  *
- * srsLTE is distributed in the hope that it will be useful,
+ * srsRAN is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU Affero General Public License for more details.
@@ -19,9 +19,13 @@
  *
  */
 
-#ifndef SRSLTE_ENB_STACK_BASE_H
-#define SRSLTE_ENB_STACK_BASE_H
+#ifndef SRSRAN_ENB_STACK_BASE_H
+#define SRSRAN_ENB_STACK_BASE_H
 
+#include "srsran/interfaces/enb_interfaces.h"
+#include "srsran/interfaces/enb_mac_interfaces.h"
+#include "srsran/interfaces/enb_s1ap_interfaces.h"
+#include "srsue/hdr/stack/upper/gw.h"
 #include <string>
 
 namespace srsenb {
@@ -33,8 +37,17 @@ typedef struct {
 
 typedef struct {
   bool        enable;
+  std::string client_ip;
+  std::string bind_ip;
+  uint16_t    client_port;
+  uint16_t    bind_port;
+} pcap_net_args_t;
+
+typedef struct {
+  bool        enable;
   std::string m1u_multiaddr;
   std::string m1u_if_addr;
+  uint16_t    mcs;
 } embms_args_t;
 
 typedef struct {
@@ -55,13 +68,25 @@ typedef struct {
   int stack_hex_limit;
 } stack_log_args_t;
 
+// Expert arguments to create GW without core NW
 typedef struct {
+  std::string      ip_addr;
+  srsue::gw_args_t gw_args;
+  uint8_t          drb_lcid;
+  uint16_t         rnti;
+} core_less_args_t;
+
+typedef struct {
+  std::string      type;
+  uint32_t         sync_queue_size; // Max allowed difference between PHY and Stack clocks (in TTI)
   mac_args_t       mac;
   s1ap_args_t      s1ap;
   pcap_args_t      mac_pcap;
+  pcap_net_args_t  mac_pcap_net;
   pcap_args_t      s1ap_pcap;
   stack_log_args_t log;
   embms_args_t     embms;
+  core_less_args_t coreless;
 } stack_args_t;
 
 struct stack_metrics_t;
@@ -81,4 +106,4 @@ public:
 
 } // namespace srsenb
 
-#endif // SRSLTE_ENB_STACK_BASE_H
+#endif // SRSRAN_ENB_STACK_BASE_H

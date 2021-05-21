@@ -1,14 +1,14 @@
-/*
- * Copyright 2013-2020 Software Radio Systems Limited
+/**
+ * Copyright 2013-2021 Software Radio Systems Limited
  *
- * This file is part of srsLTE.
+ * This file is part of srsRAN.
  *
- * srsLTE is free software: you can redistribute it and/or modify
+ * srsRAN is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
  * published by the Free Software Foundation, either version 3 of
  * the License, or (at your option) any later version.
  *
- * srsLTE is distributed in the hope that it will be useful,
+ * srsRAN is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU Affero General Public License for more details.
@@ -22,57 +22,63 @@
 #ifndef SRSUE_PRACH_H
 #define SRSUE_PRACH_H
 
-#include <string.h>
-
-#include "srslte/common/log.h"
-#include "srslte/interfaces/ue_interfaces.h"
-#include "srslte/radio/radio.h"
-#include "srslte/srslte.h"
+#include "srsran/interfaces/ue_phy_interfaces.h"
+#include "srsran/radio/radio.h"
+#include "srsran/srslog/srslog.h"
+#include "srsran/srsran.h"
+#include <bitset>
 
 namespace srsue {
 
 class prach
 {
 public:
-  prach()
-  {
-    bzero(&prach_obj, sizeof(srslte_prach_t));
-    bzero(&cell, sizeof(srslte_cell_t));
-    bzero(&cfo_h, sizeof(srslte_cfo_t));
+  prach(srslog::basic_logger& logger) : logger(logger) {}
+  ~prach() { stop(); }
 
-    transmitted_tti  = 0;
-    target_power_dbm = 0;
-    mem_initiated    = false;
-    cell_initiated   = false;
-    signal_buffer    = NULL;
-  }
-  ~prach();
-  void  init(uint32_t max_prb, srslte::log* log_h);
+  void  init(uint32_t max_prb);
   void  stop();
-  bool  set_cell(srslte_cell_t cell, srslte_prach_cfg_t prach_cfg);
+  bool  set_cell(srsran_cell_t cell, srsran_prach_cfg_t prach_cfg);
   bool  prepare_to_send(uint32_t preamble_idx, int allowed_subframe = -1, float target_power_dbm = -1);
-  bool  is_ready_to_send(uint32_t current_tti);
-  bool  is_pending();
+  bool  is_ready_to_send(uint32_t current_tti, uint32_t current_pci);
+  bool  is_pending() const;
   cf_t* generate(float cfo, uint32_t* nof_sf, float* target_power = NULL);
 
-  phy_interface_mac_lte::prach_info_t get_info();
+  phy_interface_mac_lte::prach_info_t get_info() const;
 
 private:
-  const static int MAX_LEN_SF = 3;
+  bool generate_buffer(uint32_t f_idx);
 
-  srslte::log*   log_h;
-  int            preamble_idx;
-  int            allowed_subframe;
-  bool           mem_initiated;
-  bool           cell_initiated;
-  uint32_t       len;
-  cf_t*          buffer[12][64];
-  srslte_prach_t prach_obj;
-  int            transmitted_tti;
-  srslte_cell_t  cell;
-  cf_t*          signal_buffer;
-  srslte_cfo_t   cfo_h;
-  float          target_power_dbm;
+  bool is_buffer_generated(uint32_t f_idx, uint32_t preamble_index) const
+  {
+    return buffer_bitmask.test(f_idx * 64 + preamble_index);
+  }
+
+  void set_buffer_as_generated(uint32_t f_idx, uint32_t preamble_index)
+  {
+    buffer_bitmask.set(f_idx * 64 + preamble_index);
+  }
+
+private:
+  static constexpr unsigned MAX_LEN_SF    = 3;
+  static constexpr unsigned max_fs        = 12;
+  static constexpr unsigned max_preambles = 64;
+
+  srslog::basic_logger&                                logger;
+  srsran_prach_t                                       prach_obj        = {};
+  srsran_cell_t                                        cell             = {};
+  srsran_cfo_t                                         cfo_h            = {};
+  srsran_prach_cfg_t                                   cfg              = {};
+  std::array<std::array<cf_t*, max_preambles>, max_fs> buffer           = {};
+  cf_t*                                                signal_buffer    = nullptr;
+  int                                                  preamble_idx     = -1;
+  uint32_t                                             len              = 0;
+  int                                                  allowed_subframe = 0;
+  int                                                  transmitted_tti  = 0;
+  float                                                target_power_dbm = 0;
+  bool                                                 mem_initiated    = false;
+  bool                                                 cell_initiated   = false;
+  std::bitset<max_fs * max_preambles>                  buffer_bitmask;
 };
 
 } // namespace srsue

@@ -1,14 +1,14 @@
-/*
- * Copyright 2013-2020 Software Radio Systems Limited
+/**
+ * Copyright 2013-2021 Software Radio Systems Limited
  *
- * This file is part of srsLTE.
+ * This file is part of srsRAN.
  *
- * srsLTE is free software: you can redistribute it and/or modify
+ * srsRAN is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
  * published by the Free Software Foundation, either version 3 of
  * the License, or (at your option) any later version.
  *
- * srsLTE is distributed in the hope that it will be useful,
+ * srsRAN is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU Affero General Public License for more details.
@@ -22,27 +22,13 @@
 #ifndef SRSUE_PCSC_USIM_H
 #define SRSUE_PCSC_USIM_H
 
-#include "srslte/common/common.h"
-#include "srslte/common/log.h"
-#include "srslte/common/security.h"
-#include "srslte/interfaces/ue_interfaces.h"
+#include "srsran/common/common.h"
+#include "srsran/common/security.h"
 #include "srsue/hdr/stack/upper/usim.h"
 #include <string>
 #include <winscard.h>
 
 namespace srsue {
-
-#define AKA_RAND_LEN 16
-#define AKA_AUTN_LEN 16
-#define AKA_AUTS_LEN 14
-#define RES_MAX_LEN 16
-#define MAC_LEN 8
-#define IK_LEN 16
-#define CK_LEN 16
-#define AK_LEN 6
-#define SQN_LEN 6
-
-#define KEY_LEN 32
 
 typedef enum { SCARD_GSM_SIM, SCARD_USIM } sim_types_t;
 
@@ -54,19 +40,12 @@ static inline uint16_t to_uint16(const uint8_t* a)
 class pcsc_usim : public usim_base
 {
 public:
-  pcsc_usim(srslte::log* log_);
+  explicit pcsc_usim(srslog::basic_logger& logger);
   ~pcsc_usim();
   int  init(usim_args_t* args);
   void stop();
 
   // NAS interface
-  std::string get_imsi_str();
-  std::string get_imei_str();
-
-  bool get_imsi_vec(uint8_t* imsi_, uint32_t n);
-  bool get_imei_vec(uint8_t* imei_, uint32_t n);
-  bool get_home_plmn_id(srslte::plmn_id_t* home_plmn_id);
-
   auth_result_t generate_authentication_response(uint8_t* rand,
                                                  uint8_t* autn_enb,
                                                  uint16_t mcc,
@@ -75,53 +54,20 @@ public:
                                                  int*     res_len,
                                                  uint8_t* k_asme);
 
-  void generate_nas_keys(uint8_t*                            k_asme,
-                         uint8_t*                            k_nas_enc,
-                         uint8_t*                            k_nas_int,
-                         srslte::CIPHERING_ALGORITHM_ID_ENUM cipher_algo,
-                         srslte::INTEGRITY_ALGORITHM_ID_ENUM integ_algo);
-
-  // RRC interface
-  void generate_as_keys(uint8_t* k_asme, uint32_t count_ul, srslte::as_security_config_t* sec_cfg);
-  void generate_as_keys_ho(uint32_t pci, uint32_t earfcn, int ncc, srslte::as_security_config_t* sec_cfg);
+  // Helpers
+  virtual std::string get_mnc_str(const uint8_t* imsi_vec, std::string mcc_str) final;
 
 private:
-  srslte::log* log = nullptr;
-
-  // User data
-  // 3GPP 33.102 v10.0.0 Annex H
-  uint64_t imsi   = 0;
-  uint64_t imei   = 0;
-
-  std::string imsi_str;
-  std::string imei_str;
-
-  uint32_t mnc_length = 0;
-
-  // Security variables
-  uint8_t ck[CK_LEN]          = {};
-  uint8_t ik[IK_LEN]          = {};
-  uint8_t ak[AK_LEN]          = {};
-  uint8_t k_asme[KEY_LEN]     = {};
-  uint8_t nh[KEY_LEN]         = {};
-  uint8_t k_enb[KEY_LEN]      = {};
-  uint8_t k_enb_star[KEY_LEN] = {};
-  uint8_t auts[AKA_AUTS_LEN]  = {};
-
-  uint32_t current_ncc = 0;
-
-  bool initiated = false;
-
   // Smartcard sub-class which is a port of the PC/SC smartcard implementation
   // of WPA Supplicant written by Jouni Malinen <j@w1.fi> and licensed under BSD
   // Source: https://w1.fi/cvs.html
   class scard
   {
   public:
-    scard() : log(NULL){};
+    explicit scard(srslog::basic_logger& logger) : logger(logger) {}
     ~scard(){};
 
-    int  init(usim_args_t* args, srslte::log* log_);
+    int  init(usim_args_t* args);
     void deinit();
 
     int select_file(unsigned short file_id, unsigned char* buf, size_t* buf_len);
@@ -232,12 +178,12 @@ private:
 #define SCARD_CHV1_OFFSET 13
 #define SCARD_CHV1_FLAG 0x80
 
-    SCARDCONTEXT  scard_context;
-    SCARDHANDLE   scard_handle;
-    long unsigned scard_protocol;
-    sim_types_t   sim_type;
-    bool          pin1_needed;
-    srslte::log*  log;
+    SCARDCONTEXT          scard_context;
+    SCARDHANDLE           scard_handle;
+    long unsigned         scard_protocol;
+    sim_types_t           sim_type;
+    bool                  pin1_needed;
+    srslog::basic_logger& logger;
   };
 
   scard sc;

@@ -1,14 +1,14 @@
-/*
- * Copyright 2013-2020 Software Radio Systems Limited
+/**
+ * Copyright 2013-2021 Software Radio Systems Limited
  *
- * This file is part of srsLTE.
+ * This file is part of srsRAN.
  *
- * srsLTE is free software: you can redistribute it and/or modify
+ * srsRAN is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
  * published by the Free Software Foundation, either version 3 of
  * the License, or (at your option) any later version.
  *
- * srsLTE is distributed in the hope that it will be useful,
+ * srsRAN is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU Affero General Public License for more details.
@@ -19,12 +19,15 @@
  *
  */
 
-#ifndef SRSLTE_RRC_CONFIG_H
-#define SRSLTE_RRC_CONFIG_H
+#ifndef SRSRAN_RRC_CONFIG_H
+#define SRSRAN_RRC_CONFIG_H
 
-#include "srslte/asn1/rrc_asn1.h"
-#include "srslte/common/security.h"
-#include "srslte/interfaces/enb_rrc_interface_types.h"
+#include "rrc_config_common.h"
+#include "srsran/asn1/rrc.h"
+#include "srsran/common/security.h"
+#include "srsran/interfaces/enb_rrc_interface_types.h"
+#include "srsran/phy/common/phy_common.h"
+#include <array>
 
 namespace srsenb {
 
@@ -36,28 +39,12 @@ struct rrc_cfg_sr_t {
   uint32_t                                                   nof_subframes;
 };
 
-enum rrc_cfg_cqi_mode_t { RRC_CFG_CQI_MODE_PERIODIC = 0, RRC_CFG_CQI_MODE_APERIODIC, RRC_CFG_CQI_MODE_N_ITEMS };
-
-static const char rrc_cfg_cqi_mode_text[RRC_CFG_CQI_MODE_N_ITEMS][20] = {"periodic", "aperiodic"};
-
-typedef struct {
-  uint32_t           sf_mapping[80];
-  uint32_t           nof_subframes;
-  uint32_t           nof_prb;
-  uint32_t           period;
-  uint32_t           m_ri;
-  bool               simultaneousAckCQI;
-  rrc_cfg_cqi_mode_t mode;
-} rrc_cfg_cqi_t;
-
-typedef struct {
-  bool                                          configured;
+struct rrc_cfg_qci_t {
+  bool                                          configured = false;
   asn1::rrc::lc_ch_cfg_s::ul_specific_params_s_ lc_cfg;
   asn1::rrc::pdcp_cfg_s                         pdcp_cfg;
   asn1::rrc::rlc_cfg_c                          rlc_cfg;
-} rrc_cfg_qci_t;
-
-#define MAX_NOF_QCI 10
+};
 
 struct rrc_cfg_t {
   uint32_t enb_id; ///< Required to pack SIB1
@@ -66,23 +53,33 @@ struct rrc_cfg_t {
   asn1::rrc::sib_info_item_c sibs[ASN1_RRC_MAX_SIB];
   asn1::rrc::mac_main_cfg_s  mac_cnfg;
 
-  asn1::rrc::pusch_cfg_ded_s          pusch_cfg;
-  asn1::rrc::ant_info_ded_s           antenna_info;
-  asn1::rrc::pdsch_cfg_ded_s::p_a_e_  pdsch_cfg;
-  rrc_cfg_sr_t                        sr_cfg;
-  rrc_cfg_cqi_t                       cqi_cfg;
-  rrc_cfg_qci_t                       qci_cfg[MAX_NOF_QCI];
-  bool                                enable_mbsfn;
-  uint32_t                            inactivity_timeout_ms;
-  srslte::CIPHERING_ALGORITHM_ID_ENUM eea_preference_list[srslte::CIPHERING_ALGORITHM_ID_N_ITEMS];
-  srslte::INTEGRITY_ALGORITHM_ID_ENUM eia_preference_list[srslte::INTEGRITY_ALGORITHM_ID_N_ITEMS];
-  bool                                meas_cfg_present = false;
-  srslte_cell_t                       cell;
-  cell_list_t                         cell_list;
+  asn1::rrc::pusch_cfg_ded_s                                                              pusch_cfg;
+  asn1::rrc::ant_info_ded_s                                                               antenna_info;
+  asn1::rrc::pdsch_cfg_ded_s::p_a_e_                                                      pdsch_cfg;
+  rrc_cfg_sr_t                                                                            sr_cfg;
+  rrc_cfg_cqi_t                                                                           cqi_cfg;
+  std::map<uint32_t, rrc_cfg_qci_t>                                                       qci_cfg;
+  bool                                                                                    enable_mbsfn;
+  uint16_t                                                                                mbms_mcs;
+  uint32_t                                                                                inactivity_timeout_ms;
+  std::array<srsran::CIPHERING_ALGORITHM_ID_ENUM, srsran::CIPHERING_ALGORITHM_ID_N_ITEMS> eea_preference_list;
+  std::array<srsran::INTEGRITY_ALGORITHM_ID_ENUM, srsran::INTEGRITY_ALGORITHM_ID_N_ITEMS> eia_preference_list;
+  bool                                                                                    meas_cfg_present = false;
+  srsran_cell_t                                                                           cell;
+  cell_list_t                                                                             cell_list;
+  cell_list_t                                                                             cell_list_nr;
+  uint32_t                                                                                max_mac_dl_kos;
+  uint32_t                                                                                max_mac_ul_kos;
 };
 
 constexpr uint32_t UE_PCELL_CC_IDX = 0;
 
+struct ue_var_cfg_t {
+  asn1::rrc::rr_cfg_ded_s                rr_cfg;
+  asn1::rrc::meas_cfg_s                  meas_cfg;
+  asn1::rrc::scell_to_add_mod_list_r10_l scells;
+};
+
 } // namespace srsenb
 
-#endif // SRSLTE_RRC_CONFIG_H
+#endif // SRSRAN_RRC_CONFIG_H

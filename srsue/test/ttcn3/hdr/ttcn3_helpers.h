@@ -1,14 +1,14 @@
-/*
- * Copyright 2013-2020 Software Radio Systems Limited
+/**
+ * Copyright 2013-2021 Software Radio Systems Limited
  *
- * This file is part of srsLTE.
+ * This file is part of srsRAN.
  *
- * srsLTE is free software: you can redistribute it and/or modify
+ * srsRAN is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
  * published by the Free Software Foundation, either version 3 of
  * the License, or (at your option) any later version.
  *
- * srsLTE is distributed in the hope that it will be useful,
+ * srsRAN is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU Affero General Public License for more details.
@@ -29,6 +29,8 @@
 
 #include "rapidjson/document.h"     // rapidjson's DOM-style API
 #include "rapidjson/prettywriter.h" // for stringify JSON
+#include "srsran/asn1/asn1_utils.h"
+#include "srsran/common/byte_buffer.h"
 #include <algorithm>
 #include <assert.h>
 #include <bitset>
@@ -38,6 +40,7 @@
 
 using namespace std;
 using namespace rapidjson;
+using namespace srsran;
 
 class ttcn3_helpers
 {
@@ -363,6 +366,16 @@ public:
     return config_flag.GetBool();
   }
 
+  static std::string get_cell_name(Document& document)
+  {
+    const Value& a = document["Common"];
+
+    assert(a.HasMember("CellId"));
+    const Value& cell_id = a["CellId"];
+
+    return cell_id.GetString();
+  }
+
   static timing_info_t get_timing_info(Document& document)
   {
     timing_info_t timing = {};
@@ -377,7 +390,6 @@ public:
         document["Common"]["TimingInfo"].HasMember("SubFrame") &&
         document["Common"]["TimingInfo"]["SubFrame"].HasMember("SFN") &&
         document["Common"]["TimingInfo"]["SubFrame"]["SFN"].HasMember("Number")) {
-
       timing.tti = document["Common"]["TimingInfo"]["SubFrame"]["SFN"]["Number"].GetInt() * 10;
 
       // check SF index only
@@ -402,6 +414,156 @@ public:
     assert(config_flag.IsBool());
 
     return config_flag.GetBool();
+  }
+
+  static std::string
+  get_rrc_pdu_ind_for_pdu(uint32_t tti, uint32_t lcid, const std::string cell_, srsran::unique_byte_buffer_t pdubuf)
+  {
+    Document resp;
+    resp.SetObject();
+
+    // Create members of common object
+
+    // CellId
+    Value cell(cell_.c_str(), resp.GetAllocator());
+
+    // RoutingInfo
+    Value radiobearer_id(kObjectType);
+    radiobearer_id.AddMember("Srb", lcid, resp.GetAllocator());
+    Value routing_info(kObjectType);
+    routing_info.AddMember("RadioBearerId", radiobearer_id, resp.GetAllocator());
+
+    // TimingInfo
+    // SFN
+    uint32_t sfn = tti / 10;
+    Value    sfn_key(kObjectType);
+    sfn_key.AddMember("Number", sfn, resp.GetAllocator());
+
+    // Actual subframe index
+    uint32_t sf_idx = tti % 10;
+    Value    sf_idx_key(kObjectType);
+    sf_idx_key.AddMember("Number", sf_idx, resp.GetAllocator());
+
+    // Put it all together
+    Value subframe_key(kObjectType);
+    subframe_key.AddMember("SFN", sfn_key, resp.GetAllocator());
+    subframe_key.AddMember("Subframe", sf_idx_key, resp.GetAllocator());
+
+    Value timing_info(kObjectType);
+    timing_info.AddMember("SubFrame", subframe_key, resp.GetAllocator());
+
+    // Status
+    Value status(kObjectType);
+    status.AddMember("Ok", true, resp.GetAllocator());
+
+    // Now, create the common object itself and add members
+    Value common(kObjectType);
+    common.AddMember("CellId", cell, resp.GetAllocator());
+    common.AddMember("RoutingInfo", routing_info, resp.GetAllocator());
+    common.AddMember("TimingInfo", timing_info, resp.GetAllocator());
+    common.AddMember("Status", status, resp.GetAllocator());
+
+    resp.AddMember("Common", common, resp.GetAllocator());
+
+    // Add RRC PDU
+    std::string hexpdu = asn1::octstring_to_string(pdubuf->msg, pdubuf->N_bytes);
+    Value       pdu(hexpdu.c_str(), resp.GetAllocator());
+
+    Value rrcpdu(kObjectType);
+    if (lcid == 0) {
+      rrcpdu.AddMember("Ccch", pdu, resp.GetAllocator());
+    } else {
+      rrcpdu.AddMember("Dcch", pdu, resp.GetAllocator());
+    }
+
+    resp.AddMember("RrcPdu", rrcpdu, resp.GetAllocator());
+
+    // JSON-ize
+    StringBuffer         buffer;
+    Writer<StringBuffer> writer(buffer);
+    resp.Accept(writer);
+
+    // Return as std::string
+    return std::string(buffer.GetString());
+  }
+
+  static std::string
+  get_drb_common_ind_for_pdu(uint32_t tti, uint32_t lcid, const std::string cell_, srsran::unique_byte_buffer_t drbpdu)
+  {
+    Document resp;
+    resp.SetObject();
+
+    // Create members of common object
+
+    // Cell
+    Value cell(cell_.c_str(), resp.GetAllocator());
+
+    // RoutingInfo
+    Value radiobearer_id(kObjectType);
+    radiobearer_id.AddMember("Drb", lcid - 2, resp.GetAllocator());
+    Value routing_info(kObjectType);
+    routing_info.AddMember("RadioBearerId", radiobearer_id, resp.GetAllocator());
+
+    // TimingInfo
+    // SFN
+    uint32_t sfn = tti / 10;
+    Value    sfn_key(kObjectType);
+    sfn_key.AddMember("Number", sfn, resp.GetAllocator());
+
+    // Actual subframe index
+    uint32_t sf_idx = tti % 10;
+    Value    sf_idx_key(kObjectType);
+    sf_idx_key.AddMember("Number", sf_idx, resp.GetAllocator());
+
+    // Put it all together
+    Value subframe_key(kObjectType);
+    subframe_key.AddMember("SFN", sfn_key, resp.GetAllocator());
+    subframe_key.AddMember("Subframe", sf_idx_key, resp.GetAllocator());
+
+    Value timing_info(kObjectType);
+    timing_info.AddMember("SubFrame", subframe_key, resp.GetAllocator());
+
+    // Status
+    Value status(kObjectType);
+    status.AddMember("Ok", true, resp.GetAllocator());
+
+    // Now, create the common object itself and add members
+    Value common(kObjectType);
+    common.AddMember("CellId", cell, resp.GetAllocator());
+    common.AddMember("RoutingInfo", routing_info, resp.GetAllocator());
+    common.AddMember("TimingInfo", timing_info, resp.GetAllocator());
+    common.AddMember("Status", status, resp.GetAllocator());
+
+    resp.AddMember("Common", common, resp.GetAllocator());
+
+    // Add the user plane data
+    std::string hexdrb = asn1::octstring_to_string(drbpdu->msg, drbpdu->N_bytes);
+    Value       sdu(hexdrb.c_str(), resp.GetAllocator());
+
+    Value pdcpsdu(kArrayType);
+    pdcpsdu.PushBack(sdu, resp.GetAllocator());
+
+    Value pdusdulist(kObjectType);
+    pdusdulist.AddMember("PdcpSdu", pdcpsdu, resp.GetAllocator());
+
+    Value sfdata(kObjectType);
+    sfdata.AddMember("PduSduList", pdusdulist, resp.GetAllocator());
+
+    // TODO: Get real no. of TTIs for transmission
+    sfdata.AddMember("NoOfTTIs", 1, resp.GetAllocator());
+
+    Value uplane(kObjectType);
+    uplane.AddMember("SubframeData", sfdata, resp.GetAllocator());
+
+    resp.AddMember("U_Plane", uplane, resp.GetAllocator());
+
+    // JSON-ize
+    StringBuffer         buffer;
+    Writer<StringBuffer> writer(buffer);
+    resp.Accept(writer);
+
+    // Return as std::string
+    return std::string(buffer.GetString());
   }
 };
 

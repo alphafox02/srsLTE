@@ -1,14 +1,14 @@
-/*
- * Copyright 2013-2020 Software Radio Systems Limited
+/**
+ * Copyright 2013-2021 Software Radio Systems Limited
  *
- * This file is part of srsLTE.
+ * This file is part of srsRAN.
  *
- * srsLTE is free software: you can redistribute it and/or modify
+ * srsRAN is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
  * published by the Free Software Foundation, either version 3 of
  * the License, or (at your option) any later version.
  *
- * srsLTE is distributed in the hope that it will be useful,
+ * srsRAN is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU Affero General Public License for more details.
@@ -20,40 +20,51 @@
  */
 
 #include "srsue/hdr/stack/ue_stack_lte.h"
-#include "srslte/common/logmap.h"
-#include "srslte/srslte.h"
+#include "srsran/common/standard_streams.h"
+#include "srsran/interfaces/ue_phy_interfaces.h"
+#include "srsran/srslog/event_trace.h"
+
 #include <algorithm>
 #include <chrono>
 #include <numeric>
+#include <thread>
 
-using namespace srslte;
+using namespace srsran;
 
 namespace srsue {
 
 ue_stack_lte::ue_stack_lte() :
-  timers(64),
   running(false),
   args(),
-  logger(nullptr),
+  stack_logger(srslog::fetch_basic_logger("STCK", false)),
+  mac_logger(srslog::fetch_basic_logger("MAC")),
+  rlc_logger(srslog::fetch_basic_logger("RLC", false)),
+  pdcp_logger(srslog::fetch_basic_logger("PDCP", false)),
+  rrc_logger(srslog::fetch_basic_logger("RRC", false)),
+  usim_logger(srslog::fetch_basic_logger("USIM", false)),
+  nas_logger(srslog::fetch_basic_logger("NAS", false)),
+  mac_nr_logger(srslog::fetch_basic_logger("MAC-NR")),
+  rrc_nr_logger(srslog::fetch_basic_logger("RRC-NR", false)),
+  mac_pcap(),
+  mac_nr_pcap(),
   usim(nullptr),
   phy(nullptr),
   rlc("RLC"),
-  mac("MAC "),
-  rrc(this),
-  pdcp(this, "PDCP"),
-  nas(this),
+  mac("MAC", &task_sched),
+  rrc(this, &task_sched),
+  mac_nr(&task_sched),
+  rrc_nr(&task_sched),
+  pdcp(&task_sched, "PDCP"),
+  nas(&task_sched),
   thread("STACK"),
-  pending_tasks(512),
-  background_tasks(2),
+  task_sched(512, 64),
   tti_tprof("tti_tprof", "STCK", TTI_STAT_PERIOD)
 {
-  ue_queue_id         = pending_tasks.add_queue();
-  sync_queue_id       = pending_tasks.add_queue();
-  gw_queue_id         = pending_tasks.add_queue();
-  stack_queue_id      = pending_tasks.add_queue();
-  background_queue_id = pending_tasks.add_queue();
-
-  background_tasks.start();
+  get_background_workers().set_nof_workers(2);
+  ue_task_queue  = task_sched.make_task_queue();
+  gw_queue_id    = task_sched.make_task_queue();
+  cfg_task_queue = task_sched.make_task_queue();
+  // sync_queue is added in init()
 }
 
 ue_stack_lte::~ue_stack_lte()
@@ -67,79 +78,157 @@ std::string ue_stack_lte::get_type()
 }
 
 int ue_stack_lte::init(const stack_args_t&      args_,
-                       srslte::logger*          logger_,
                        phy_interface_stack_lte* phy_,
+                       phy_interface_stack_nr*  phy_nr_,
                        gw_interface_stack*      gw_)
+{
+  phy_nr = phy_nr_;
+  if (init(args_, phy_, gw_)) {
+    return SRSRAN_ERROR;
+  }
+  return SRSRAN_SUCCESS;
+}
+
+int ue_stack_lte::init(const stack_args_t& args_, phy_interface_stack_lte* phy_, gw_interface_stack* gw_)
 {
   phy = phy_;
   gw  = gw_;
 
-  if (init(args_, logger_)) {
-    return SRSLTE_ERROR;
+  if (init(args_)) {
+    return SRSRAN_ERROR;
   }
 
-  return SRSLTE_SUCCESS;
+  return SRSRAN_SUCCESS;
 }
 
-int ue_stack_lte::init(const stack_args_t& args_, srslte::logger* logger_)
+int ue_stack_lte::init(const stack_args_t& args_)
 {
-  args   = args_;
-  logger = logger_;
+  args = args_;
 
   // init own log
-  stack_log->set_level(args.log.stack_level);
-  stack_log->set_hex_limit(args.log.stack_hex_limit);
-  pool_log->set_level(srslte::LOG_LEVEL_WARNING);
-  byte_buffer_pool::get_instance()->set_log(pool_log.get());
+  stack_logger.set_level(srslog::str_to_basic_level(args.log.stack_level));
+  stack_logger.set_hex_dump_max_size(args.log.stack_hex_limit);
+  byte_buffer_pool::get_instance()->enable_logger(true);
 
   // init layer logs
-  srslte::logmap::register_log(std::unique_ptr<srslte::log>{new srslte::log_filter{"MAC", logger, true}});
-  mac_log->set_level(args.log.mac_level);
-  mac_log->set_hex_limit(args.log.mac_hex_limit);
-  rlc_log->set_level(args.log.rlc_level);
-  rlc_log->set_hex_limit(args.log.rlc_hex_limit);
-  pdcp_log->set_level(args.log.pdcp_level);
-  pdcp_log->set_hex_limit(args.log.pdcp_hex_limit);
-  rrc_log->set_level(args.log.rrc_level);
-  rrc_log->set_hex_limit(args.log.rrc_hex_limit);
-  usim_log->set_level(args.log.usim_level);
-  usim_log->set_hex_limit(args.log.usim_hex_limit);
-  nas_log->set_level(args.log.nas_level);
-  nas_log->set_hex_limit(args.log.nas_hex_limit);
+  mac_logger.set_level(srslog::str_to_basic_level(args.log.mac_level));
+  mac_logger.set_hex_dump_max_size(args.log.mac_hex_limit);
+  rlc_logger.set_level(srslog::str_to_basic_level(args.log.rlc_level));
+  rlc_logger.set_hex_dump_max_size(args.log.rlc_hex_limit);
+  pdcp_logger.set_level(srslog::str_to_basic_level(args.log.pdcp_level));
+  pdcp_logger.set_hex_dump_max_size(args.log.pdcp_hex_limit);
+  rrc_logger.set_level(srslog::str_to_basic_level(args.log.rrc_level));
+  rrc_logger.set_hex_dump_max_size(args.log.rrc_hex_limit);
+  usim_logger.set_level(srslog::str_to_basic_level(args.log.usim_level));
+  usim_logger.set_hex_dump_max_size(args.log.usim_hex_limit);
+  nas_logger.set_level(srslog::str_to_basic_level(args.log.nas_level));
+  nas_logger.set_hex_dump_max_size(args.log.nas_hex_limit);
 
+  mac_nr_logger.set_level(srslog::str_to_basic_level(args.log.mac_level));
+  mac_nr_logger.set_hex_dump_max_size(args.log.mac_hex_limit);
+  rrc_nr_logger.set_level(srslog::str_to_basic_level(args.log.rrc_level));
+  rrc_nr_logger.set_hex_dump_max_size(args.log.rrc_hex_limit);
+  
   // Set up pcap
-  if (args.pcap.enable) {
-    mac_pcap.open(args.pcap.filename.c_str());
-    mac.start_pcap(&mac_pcap);
+  // parse pcap trace list
+  std::vector<std::string> pcap_list;
+  srsran::string_parse_list(args.pkt_trace.enable, ',', pcap_list);
+  if (pcap_list.empty()) {
+    stack_logger.error("PCAP enable list empty defaulting to disable all PCAPs");
+    args.pkt_trace.mac_pcap.enable    = false;
+    args.pkt_trace.mac_nr_pcap.enable = false;
+    args.pkt_trace.mac_nr_pcap.enable = false;
   }
-  if (args.pcap.nas_enable) {
-    nas_pcap.open(args.pcap.nas_filename.c_str());
-    nas.start_pcap(&nas_pcap);
+
+  for (auto& pcap : pcap_list) {
+    // Remove white spaces
+    pcap.erase(std::remove_if(pcap.begin(), pcap.end(), isspace), pcap.end());
+    if (pcap == "mac" || pcap == "MAC") {
+      args.pkt_trace.mac_pcap.enable = true;
+    } else if (pcap == "mac_nr" || pcap == "MAC_NR") {
+      args.pkt_trace.mac_nr_pcap.enable = true;
+    } else if (pcap == "nas" || pcap == "NAS") {
+      args.pkt_trace.nas_pcap.enable = true;
+    } else if (pcap == "none" || pcap == "NONE") {
+      args.pkt_trace.mac_pcap.enable    = false;
+      args.pkt_trace.mac_nr_pcap.enable = false;
+      args.pkt_trace.mac_nr_pcap.enable = false;
+    } else {
+      stack_logger.error("Unknown PCAP option %s", pcap.c_str());
+    }
+  }
+
+  // If mac and mac_nr pcap option is enabled and if the filenames are the same,
+  // mac and mac_nr should write in the same PCAP file.
+  if (args.pkt_trace.mac_pcap.enable && args.pkt_trace.mac_nr_pcap.enable &&
+      args.pkt_trace.mac_pcap.filename == args.pkt_trace.mac_nr_pcap.filename) {
+    stack_logger.info("Using same MAC PCAP file %s for LTE and NR", args.pkt_trace.mac_pcap.filename.c_str());
+    if (mac_pcap.open(args.pkt_trace.mac_pcap.filename.c_str()) == SRSRAN_SUCCESS) {
+      mac.start_pcap(&mac_pcap);
+      mac_nr.start_pcap(&mac_pcap);
+      stack_logger.info("Open mac pcap file %s", args.pkt_trace.mac_pcap.filename.c_str());
+    } else {
+      stack_logger.error("Can not open pcap file %s", args.pkt_trace.mac_pcap.filename.c_str());
+    }
+  } else {
+    if (args.pkt_trace.mac_pcap.enable) {
+      if (mac_pcap.open(args.pkt_trace.mac_pcap.filename.c_str()) == SRSRAN_SUCCESS) {
+        mac.start_pcap(&mac_pcap);
+        stack_logger.info("Open mac pcap file %s", args.pkt_trace.mac_pcap.filename.c_str());
+      } else {
+        stack_logger.error("Can not open pcap file %s", args.pkt_trace.mac_pcap.filename.c_str());
+      }
+    }
+
+    if (args.pkt_trace.mac_nr_pcap.enable) {
+      if (mac_nr_pcap.open(args.pkt_trace.mac_nr_pcap.filename.c_str()) == SRSRAN_SUCCESS) {
+        mac_nr.start_pcap(&mac_nr_pcap);
+        stack_logger.info("Open mac nr pcap file %s", args.pkt_trace.mac_nr_pcap.filename.c_str());
+      } else {
+        stack_logger.error("Can not open pcap file %s", args.pkt_trace.mac_nr_pcap.filename.c_str());
+      }
+    }
+  }
+
+  if (args.pkt_trace.nas_pcap.enable) {
+    if (nas_pcap.open(args.pkt_trace.nas_pcap.filename.c_str()) == SRSRAN_SUCCESS) {
+      nas.start_pcap(&nas_pcap);
+      stack_logger.info("Open nas pcap file %s", args.pkt_trace.nas_pcap.filename.c_str());
+    } else {
+      stack_logger.error("Can not open pcap file %s", args.pkt_trace.nas_pcap.filename.c_str());
+    }
   }
 
   // Init USIM first to allow early exit in case reader couldn't be found
-  usim = usim_base::get_instance(&args.usim, usim_log.get());
+  usim = usim_base::get_instance(&args.usim, usim_logger);
   if (usim->init(&args.usim)) {
-    usim_log->console("Failed to initialize USIM.\n");
-    return SRSLTE_ERROR;
+    srsran::console("Failed to initialize USIM.\n");
+    return SRSRAN_ERROR;
   }
 
-  mac.init(phy, &rlc, &rrc, this);
-  rlc.init(&pdcp, &rrc, &timers, 0 /* RB_ID_SRB0 */);
-  pdcp.init(&rlc, &rrc, gw);
+  // add sync queue
+  sync_task_queue = task_sched.make_task_queue(args.sync_queue_size);
+
+  mac.init(phy, &rlc, &rrc);
+  rlc.init(&pdcp, &rrc, &rrc_nr, task_sched.get_timer_handler(), 0 /* RB_ID_SRB0 */);
+  pdcp.init(&rlc, &rrc, &rrc_nr, gw);
   nas.init(usim.get(), &rrc, gw, args.nas);
-  rrc.init(phy, &mac, &rlc, &pdcp, &nas, usim.get(), gw, args.rrc);
+
+  mac_nr_args_t mac_nr_args = {};
+  mac_nr.init(mac_nr_args, phy_nr, &rlc, &rrc_nr);
+  rrc_nr.init(phy_nr, &mac_nr, &rlc, &pdcp, gw, &rrc, usim.get(), task_sched.get_timer_handler(), nullptr, args.rrc_nr);
+  rrc.init(phy, &mac, &rlc, &pdcp, &nas, usim.get(), gw, &rrc_nr, args.rrc);
 
   running = true;
   start(STACK_MAIN_THREAD_PRIO);
 
-  return SRSLTE_SUCCESS;
+  return SRSRAN_SUCCESS;
 }
 
 void ue_stack_lte::stop()
 {
   if (running) {
-    pending_tasks.try_push(ue_queue_id, [this]() { stop_impl(); });
+    ue_task_queue.try_push([this]() { stop_impl(); });
     wait_thread_finish();
   }
 }
@@ -156,39 +245,41 @@ void ue_stack_lte::stop_impl()
   pdcp.stop();
   mac.stop();
 
-  if (args.pcap.enable) {
+  if (args.pkt_trace.mac_pcap.enable) {
     mac_pcap.close();
   }
-  if (args.pcap.nas_enable) {
+  if (args.pkt_trace.mac_nr_pcap.enable) {
+    mac_nr_pcap.close();
+  }
+  if (args.pkt_trace.nas_pcap.enable) {
     nas_pcap.close();
   }
+
+  task_sched.stop();
+  get_background_workers().stop();
 }
 
 bool ue_stack_lte::switch_on()
 {
   if (running) {
-    pending_tasks.try_push(ue_queue_id,
-                           [this]() { nas.start_attach_proc(nullptr, srslte::establishment_cause_t::mo_sig); });
-    return true;
+    ue_task_queue.try_push([this]() { nas.switch_on(); });
   }
-  return false;
+  return true;
 }
 
 bool ue_stack_lte::switch_off()
 {
   // generate detach request with switch-off flag
-  nas.detach_request(true);
+  nas.switch_off();
 
   // wait for max. 5s for it to be sent (according to TS 24.301 Sec 25.5.2.2)
-  const uint32_t RB_ID_SRB1 = 1;
-  int            cnt = 0, timeout = 5000;
-
-  while (rlc.has_data(RB_ID_SRB1) && ++cnt <= timeout) {
-    usleep(1000);
+  int cnt = 0, timeout_ms = 5000;
+  while (not rrc.srbs_flushed() && ++cnt <= timeout_ms) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   bool detach_sent = true;
-  if (rlc.has_data(RB_ID_SRB1)) {
-    logmap::get("NAS ")->warning("Detach couldn't be sent after %ds.\n", timeout);
+  if (not rrc.srbs_flushed()) {
+    srslog::fetch_basic_logger("NAS").warning("Detach couldn't be sent after %dms.", timeout_ms);
     detach_sent = false;
   }
 
@@ -198,40 +289,47 @@ bool ue_stack_lte::switch_off()
 bool ue_stack_lte::enable_data()
 {
   // perform attach request
-  stack_log->console("Turning off airplane mode.\n");
-  return switch_on();
+  srsran::console("Turning off airplane mode.\n");
+  return nas.enable_data();
 }
 
 bool ue_stack_lte::disable_data()
 {
   // generate detach request
-  stack_log->console("Turning on airplane mode.\n");
-  return nas.detach_request(false);
+  srsran::console("Turning on airplane mode.\n");
+  return nas.disable_data();
+}
+
+bool ue_stack_lte::start_service_request()
+{
+  if (running) {
+    ue_task_queue.try_push([this]() { nas.start_service_request(srsran::establishment_cause_t::mo_data); });
+  }
+  return true;
 }
 
 bool ue_stack_lte::get_metrics(stack_metrics_t* metrics)
 {
   // use stack thread to query metrics
-  pending_tasks.try_push(ue_queue_id, [this]() {
+  ue_task_queue.try_push([this]() {
     stack_metrics_t metrics{};
+    metrics.ul_dropped_sdus = ul_dropped_sdus;
     mac.get_metrics(metrics.mac);
-    rlc.get_metrics(metrics.rlc);
+    mac_nr.get_metrics(metrics.mac_nr);
+    rlc.get_metrics(metrics.rlc, metrics.mac[0].nof_tti);
     nas.get_metrics(&metrics.nas);
     rrc.get_metrics(metrics.rrc);
     pending_stack_metrics.push(metrics);
   });
   // wait for result
   *metrics = pending_stack_metrics.wait_pop();
-  return (metrics->nas.state == EMM_STATE_REGISTERED && metrics->rrc.state == RRC_STATE_CONNECTED);
+  return (metrics->nas.state == emm_state_t::state_t::registered && metrics->rrc.state == RRC_STATE_CONNECTED);
 }
 
 void ue_stack_lte::run_thread()
 {
   while (running) {
-    srslte::move_task_t task{};
-    if (pending_tasks.wait_pop(&task) >= 0) {
-      task();
-    }
+    task_sched.run_next_task();
   }
 }
 
@@ -249,15 +347,47 @@ void ue_stack_lte::run_thread()
  * @param sdu
  * @param blocking
  */
-void ue_stack_lte::write_sdu(uint32_t lcid, srslte::unique_byte_buffer_t sdu, bool blocking)
+void ue_stack_lte::write_sdu(uint32_t lcid, srsran::unique_byte_buffer_t sdu)
 {
-  auto task = [this, lcid, blocking](srslte::unique_byte_buffer_t& sdu) {
-    pdcp.write_sdu(lcid, std::move(sdu), blocking);
-  };
-  bool ret = pending_tasks.try_push(gw_queue_id, std::bind(task, std::move(sdu))).first;
+  auto task = [this, lcid](srsran::unique_byte_buffer_t& sdu) { pdcp.write_sdu(lcid, std::move(sdu)); };
+  bool ret  = gw_queue_id.try_push(std::bind(task, std::move(sdu))).first;
   if (not ret) {
-    pdcp_log->warning("GW SDU with lcid=%d was discarded.\n", lcid);
+    pdcp_logger.info("GW SDU with lcid=%d was discarded.", lcid);
+    ul_dropped_sdus++;
   }
+}
+
+/**
+ * Check whether nas is attached
+ * @return bool wether NAS is in EMM_REGISTERED
+ */
+bool ue_stack_lte::is_registered()
+{
+  return nas.is_registered();
+}
+
+/********************
+ *  PHY Interface
+ *******************/
+
+void ue_stack_lte::cell_search_complete(cell_search_ret_t ret, phy_cell_t found_cell)
+{
+  cfg_task_queue.push([this, ret, found_cell]() { rrc.cell_search_complete(ret, found_cell); });
+}
+
+void ue_stack_lte::cell_select_complete(bool status)
+{
+  cfg_task_queue.push([this, status]() { rrc.cell_select_complete(status); });
+}
+
+void ue_stack_lte::set_config_complete(bool status)
+{
+  cfg_task_queue.push([this, status]() { rrc.set_config_complete(status); });
+}
+
+void ue_stack_lte::set_scell_complete(bool status)
+{
+  cfg_task_queue.push([this, status]() { rrc.set_scell_complete(status); });
 }
 
 /********************
@@ -269,17 +399,19 @@ void ue_stack_lte::write_sdu(uint32_t lcid, srslte::unique_byte_buffer_t sdu, bo
  */
 void ue_stack_lte::in_sync()
 {
-  pending_tasks.push(sync_queue_id, [this]() { rrc.in_sync(); });
+  sync_task_queue.push([this]() { rrc.in_sync(); });
 }
 
 void ue_stack_lte::out_of_sync()
 {
-  pending_tasks.push(sync_queue_id, [this]() { rrc.out_of_sync(); });
+  sync_task_queue.push([this]() { rrc.out_of_sync(); });
 }
 
 void ue_stack_lte::run_tti(uint32_t tti, uint32_t tti_jump)
 {
-  pending_tasks.push(sync_queue_id, [this, tti, tti_jump]() { run_tti_impl(tti, tti_jump); });
+  if (running) {
+    sync_task_queue.push([this, tti, tti_jump]() { run_tti_impl(tti, tti_jump); });
+  }
 }
 
 void ue_stack_lte::run_tti_impl(uint32_t tti, uint32_t tti_jump)
@@ -287,84 +419,35 @@ void ue_stack_lte::run_tti_impl(uint32_t tti, uint32_t tti_jump)
   if (args.have_tti_time_stats) {
     tti_tprof.start();
   }
-  current_tti = tti_point{tti};
 
-  // Perform pending stack deferred tasks
-  for (auto& task : deferred_stack_tasks) {
-    task();
-  }
-  deferred_stack_tasks.clear();
+  trace_complete_event("ue_stack_lte::run_tti_impl", "total time");
+
+  current_tti = tti_point{tti};
 
   // perform tasks for the received TTI range
   for (uint32_t i = 0; i < tti_jump; ++i) {
     uint32_t next_tti = TTI_SUB(tti, (tti_jump - i - 1));
     mac.run_tti(next_tti);
-    timers.step_all();
+    mac_nr.run_tti(next_tti);
+    task_sched.tic();
   }
   rrc.run_tti();
+  rrc_nr.run_tti(tti);
   nas.run_tti();
 
   if (args.have_tti_time_stats) {
     std::chrono::nanoseconds dur = tti_tprof.stop();
     if (dur > TTI_WARN_THRESHOLD_MS) {
-      mac_log->warning("%s: detected long duration=%" PRId64 "ms\n",
-                       "proc_time",
-                       std::chrono::duration_cast<std::chrono::milliseconds>(dur).count());
+      mac_logger.warning("%s: detected long duration=%" PRId64 "ms",
+                         "proc_time",
+                         std::chrono::duration_cast<std::chrono::milliseconds>(dur).count());
     }
   }
 
   // print warning if PHY pushes new TTI messages faster than we process them
-  if (pending_tasks.size(sync_queue_id) > SYNC_QUEUE_WARN_THRESHOLD) {
-    stack_log->warning("Detected slow task processing (sync_queue_len=%zd).\n", pending_tasks.size(sync_queue_id));
+  if (sync_task_queue.size() > SYNC_QUEUE_WARN_THRESHOLD) {
+    stack_logger.warning("Detected slow task processing (sync_queue_len=%zd).", sync_task_queue.size());
   }
-}
-
-/***************************
- * Task Handling Interface
- **************************/
-
-void ue_stack_lte::enqueue_background_task(std::function<void(uint32_t)> f)
-{
-  background_tasks.push_task(std::move(f));
-}
-
-void ue_stack_lte::notify_background_task_result(srslte::move_task_t task)
-{
-  // run the notification in the stack thread
-  pending_tasks.push(background_queue_id, std::move(task));
-}
-
-void ue_stack_lte::defer_callback(uint32_t duration_ms, std::function<void()> func)
-{
-  timers.defer_callback(duration_ms, func);
-}
-
-void ue_stack_lte::defer_task(srslte::move_task_t task)
-{
-  deferred_stack_tasks.push_back(std::move(task));
-}
-
-/********************
- *  RRC Interface
- *******************/
-
-void ue_stack_lte::start_cell_search()
-{
-  background_tasks.push_task([this](uint32_t worker_id) {
-    phy_interface_rrc_lte::phy_cell_t        found_cell;
-    phy_interface_rrc_lte::cell_search_ret_t ret = phy->cell_search(&found_cell);
-    // notify back RRC
-    pending_tasks.push(background_queue_id, [this, found_cell, ret]() { rrc.cell_search_completed(ret, found_cell); });
-  });
-}
-
-void ue_stack_lte::start_cell_select(const phy_interface_rrc_lte::phy_cell_t* phy_cell)
-{
-  background_tasks.push_task([this, phy_cell](uint32_t worker_id) {
-    bool ret = phy->cell_select(phy_cell);
-    // notify back RRC
-    pending_tasks.push(background_queue_id, [this, ret]() { rrc.cell_select_completed(ret); });
-  });
 }
 
 } // namespace srsue

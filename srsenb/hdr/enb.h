@@ -1,14 +1,14 @@
-/*
- * Copyright 2013-2020 Software Radio Systems Limited
+/**
+ * Copyright 2013-2021 Software Radio Systems Limited
  *
- * This file is part of srsLTE.
+ * This file is part of srsRAN.
  *
- * srsLTE is free software: you can redistribute it and/or modify
+ * srsRAN is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
  * published by the Free Software Foundation, either version 3 of
  * the License, or (at your option) any later version.
  *
- * srsLTE is distributed in the hope that it will be useful,
+ * srsRAN is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU Affero General Public License for more details.
@@ -33,24 +33,24 @@
 #include <string>
 
 #include "phy/phy.h"
-#include "srsenb/hdr/stack/rrc/rrc.h"
 
-#include "srslte/radio/radio.h"
+#include "srsran/radio/radio.h"
 
 #include "srsenb/hdr/phy/enb_phy_base.h"
 #include "srsenb/hdr/stack/enb_stack_base.h"
-#include "srsenb/hdr/stack/enb_stack_lte.h"
+#include "srsenb/hdr/stack/rrc/rrc_config.h"
 
-#include "srslte/common/bcd_helpers.h"
-#include "srslte/common/buffer_pool.h"
-#include "srslte/common/interfaces_common.h"
-#include "srslte/common/log_filter.h"
-#include "srslte/common/logger_file.h"
-#include "srslte/common/mac_pcap.h"
-#include "srslte/common/security.h"
-#include "srslte/interfaces/enb_metrics_interface.h"
-#include "srslte/interfaces/sched_interface.h"
-#include "srslte/interfaces/ue_interfaces.h"
+#include "srsran/common/bcd_helpers.h"
+#include "srsran/common/buffer_pool.h"
+#include "srsran/common/interfaces_common.h"
+#include "srsran/common/mac_pcap.h"
+#include "srsran/common/security.h"
+#include "srsran/interfaces/enb_command_interface.h"
+#include "srsran/interfaces/enb_metrics_interface.h"
+#include "srsran/interfaces/sched_interface.h"
+#include "srsran/interfaces/ue_interfaces.h"
+#include "srsran/srslog/srslog.h"
+#include "srsran/system/sys_metrics_processor.h"
 
 namespace srsenb {
 
@@ -92,15 +92,24 @@ struct general_args_t {
   float       metrics_period_secs;
   bool        metrics_csv_enable;
   std::string metrics_csv_filename;
+  bool        report_json_enable;
+  std::string report_json_filename;
+  bool        alarms_log_enable;
+  std::string alarms_filename;
   bool        print_buffer_state;
+  bool        tracing_enable;
+  std::size_t tracing_buffcapacity;
+  std::string tracing_filename;
   std::string eia_pref_list;
   std::string eea_pref_list;
+  uint32_t    max_mac_dl_kos;
+  uint32_t    max_mac_ul_kos;
 };
 
 struct all_args_t {
   enb_args_t        enb;
   enb_files_t       enb_files;
-  srslte::rf_args_t rf;
+  srsran::rf_args_t rf;
   log_args_t        log;
   gui_args_t        gui;
   general_args_t    general;
@@ -108,18 +117,20 @@ struct all_args_t {
   stack_args_t      stack;
 };
 
+struct rrc_cfg_t;
+
 /*******************************************************************************
   Main eNB class
 *******************************************************************************/
 
-class enb : public enb_metrics_interface
+class enb : public enb_metrics_interface, enb_command_interface
 {
 public:
-  enb();
+  enb(srslog::sink& log_sink);
 
   virtual ~enb();
 
-  int init(const all_args_t& args_, srslte::logger* logger_);
+  int init(const all_args_t& args_);
 
   void stop();
 
@@ -127,31 +138,19 @@ public:
 
   void print_pool();
 
-  static void rf_msg(srslte_rf_error_t error);
-
-  void handle_rf_msg(srslte_rf_error_t error);
-
   // eNodeB metrics interface
-  bool get_metrics(enb_metrics_t* m);
+  bool get_metrics(enb_metrics_t* m) override;
+
+  // eNodeB command interface
+  void cmd_cell_gain(uint32_t cell_id, float gain) override;
 
 private:
   const static int ENB_POOL_SIZE = 1024 * 10;
 
-  int parse_args(const all_args_t& args_);
+  int parse_args(const all_args_t& args_, rrc_cfg_t& rrc_cfg);
 
-  // eNB components
-  std::unique_ptr<enb_stack_base>     stack = nullptr;
-  std::unique_ptr<srslte::radio>      radio = nullptr;
-  std::unique_ptr<enb_phy_base>       phy   = nullptr;
-
-  srslte::logger_stdout logger_stdout;
-  srslte::logger_file   logger_file;
-  srslte::logger*       logger = nullptr;
-  srslte::log_filter    log; // Own logger for eNB
-
-  srslte::log_filter pool_log;
-
-  srslte::byte_buffer_pool* pool = nullptr;
+  srslog::sink&         log_sink;
+  srslog::basic_logger& enb_log;
 
   all_args_t args    = {};
   bool       started = false;
@@ -159,10 +158,13 @@ private:
   phy_cfg_t phy_cfg = {};
   rrc_cfg_t rrc_cfg = {};
 
-  srslte::LOG_LEVEL_ENUM level(std::string l);
+  // eNB components
+  std::unique_ptr<enb_stack_base>     stack = nullptr;
+  std::unique_ptr<srsran::radio_base> radio = nullptr;
+  std::unique_ptr<enb_phy_base>       phy   = nullptr;
 
-  //  bool check_srslte_version();
-  int parse_cell_cfg(all_args_t* args, srslte_cell_t* cell);
+  // System metrics processor.
+  srsran::sys_metrics_processor sys_proc;
 
   std::string get_build_mode();
   std::string get_build_info();
