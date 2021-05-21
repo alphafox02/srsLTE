@@ -76,7 +76,7 @@ endif (ZEROMQ_FOUND)
 if(RF_FOUND)
 
   add_executable(cell_search_modmobmap cell_search_modmobmap.c)
-  target_link_libraries(cell_search_modmobmap srslte_phy srslte_common srslte_rf)
+  target_link_libraries(cell_search_modmobmap srsran_phy srsran_common srsran_rf)
   
   add_executable(cell_search cell_search.c)
   target_link_libraries(cell_search srsran_phy srsran_common srsran_rf)
@@ -94,7 +94,7 @@ if(RF_FOUND)
   target_link_libraries(cell_search_nbiot srsran_rf srsran_phy)
 
   add_executable(cell_search_nbiot_modmobmap cell_search_nbiot_modmobmap.c)
-  target_link_libraries(cell_search_nbiot_modmobmap srslte_rf srslte_phy)
+  target_link_libraries(cell_search_nbiot_modmobmap srsran_rf srsran_phy)
 
   add_executable(usrp_txrx usrp_txrx.c)
   target_link_libraries(usrp_txrx srsran_phy srsran_rf)
