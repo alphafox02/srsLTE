@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -23,7 +23,7 @@
 #define SRSRAN_BOUNDED_VECTOR_H
 
 #include "srsran/adt/detail/type_storage.h"
-#include "srsran/common/srsran_assert.h"
+#include "srsran/support/srsran_assert.h"
 #include <iterator>
 #include <memory>
 #include <type_traits>

@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -721,6 +721,36 @@ void srsran_vec_sub_fff_simd(const float* x, const float* y, float* z, const int
   }
 }
 
+void srsran_vec_sc_sum_fff_simd(const float* x, float h, float* z, int len)
+{
+  int i = 0;
+
+#if SRSRAN_SIMD_F_SIZE
+  const simd_f_t hh = srsran_simd_f_set1(h);
+  if (SRSRAN_IS_ALIGNED(x) && SRSRAN_IS_ALIGNED(z)) {
+    for (; i < len - SRSRAN_SIMD_F_SIZE + 1; i += SRSRAN_SIMD_F_SIZE) {
+      simd_f_t xx = srsran_simd_f_load(&x[i]);
+
+      simd_f_t zz = srsran_simd_f_add(xx, hh);
+
+      srsran_simd_f_store(&z[i], zz);
+    }
+  } else {
+    for (; i < len - SRSRAN_SIMD_F_SIZE + 1; i += SRSRAN_SIMD_F_SIZE) {
+      simd_f_t xx = srsran_simd_f_loadu(&x[i]);
+
+      simd_f_t zz = srsran_simd_f_add(xx, hh);
+
+      srsran_simd_f_storeu(&z[i], zz);
+    }
+  }
+#endif
+
+  for (; i < len; i++) {
+    z[i] = x[i] + h;
+  }
+}
+
 cf_t srsran_vec_dot_prod_ccc_simd(const cf_t* x, const cf_t* y, const int len)
 {
   int  i      = 0;
@@ -1386,7 +1416,7 @@ uint32_t srsran_vec_max_fi_simd(const float* x, const int len)
       simd_f_t   a     = srsran_simd_f_load(&x[i]);
       simd_sel_t res   = srsran_simd_f_max(a, simd_max_values);
       simd_max_indexes = srsran_simd_i_select(simd_max_indexes, simd_indexes, res);
-      simd_max_values  = (simd_f_t)srsran_simd_i_select((simd_i_t)simd_max_values, (simd_i_t)a, res);
+      simd_max_values  = srsran_simd_f_select(simd_max_values, a, res);
       simd_indexes     = srsran_simd_i_add(simd_indexes, simd_inc);
     }
   } else {
@@ -1394,7 +1424,7 @@ uint32_t srsran_vec_max_fi_simd(const float* x, const int len)
       simd_f_t   a     = srsran_simd_f_loadu(&x[i]);
       simd_sel_t res   = srsran_simd_f_max(a, simd_max_values);
       simd_max_indexes = srsran_simd_i_select(simd_max_indexes, simd_indexes, res);
-      simd_max_values  = (simd_f_t)srsran_simd_i_select((simd_i_t)simd_max_values, (simd_i_t)a, res);
+      simd_max_values  = srsran_simd_f_select(simd_max_values, a, res);
       simd_indexes     = srsran_simd_i_add(simd_indexes, simd_inc);
     }
   }
@@ -1444,7 +1474,7 @@ uint32_t srsran_vec_max_abs_fi_simd(const float* x, const int len)
       simd_f_t   a     = srsran_simd_f_abs(srsran_simd_f_load(&x[i]));
       simd_sel_t res   = srsran_simd_f_max(a, simd_max_values);
       simd_max_indexes = srsran_simd_i_select(simd_max_indexes, simd_indexes, res);
-      simd_max_values  = (simd_f_t)srsran_simd_i_select((simd_i_t)simd_max_values, (simd_i_t)a, res);
+      simd_max_values  = srsran_simd_f_select(simd_max_values, a, res);
       simd_indexes     = srsran_simd_i_add(simd_indexes, simd_inc);
     }
   } else {
@@ -1452,7 +1482,7 @@ uint32_t srsran_vec_max_abs_fi_simd(const float* x, const int len)
       simd_f_t   a     = srsran_simd_f_abs(srsran_simd_f_loadu(&x[i]));
       simd_sel_t res   = srsran_simd_f_max(a, simd_max_values);
       simd_max_indexes = srsran_simd_i_select(simd_max_indexes, simd_indexes, res);
-      simd_max_values  = (simd_f_t)srsran_simd_i_select((simd_i_t)simd_max_values, (simd_i_t)a, res);
+      simd_max_values  = srsran_simd_f_select(simd_max_values, a, res);
       simd_indexes     = srsran_simd_i_add(simd_indexes, simd_inc);
     }
   }
@@ -1511,7 +1541,7 @@ uint32_t srsran_vec_max_ci_simd(const cf_t* x, const int len)
       simd_sel_t res = srsran_simd_f_max(z1, simd_max_values);
 
       simd_max_indexes = srsran_simd_i_select(simd_max_indexes, simd_indexes, res);
-      simd_max_values  = (simd_f_t)srsran_simd_i_select((simd_i_t)simd_max_values, (simd_i_t)z1, res);
+      simd_max_values  = srsran_simd_f_select(simd_max_values, z1, res);
       simd_indexes     = srsran_simd_i_add(simd_indexes, simd_inc);
     }
   } else {
@@ -1527,7 +1557,7 @@ uint32_t srsran_vec_max_ci_simd(const cf_t* x, const int len)
       simd_sel_t res = srsran_simd_f_max(z1, simd_max_values);
 
       simd_max_indexes = srsran_simd_i_select(simd_max_indexes, simd_indexes, res);
-      simd_max_values  = (simd_f_t)srsran_simd_i_select((simd_i_t)simd_max_values, (simd_i_t)z1, res);
+      simd_max_values  = srsran_simd_f_select(simd_max_values, z1, res);
       simd_indexes     = srsran_simd_i_add(simd_indexes, simd_inc);
     }
   }
@@ -1643,7 +1673,7 @@ void srsran_vec_interleave_add_simd(const cf_t* x, const cf_t* y, cf_t* z, const
   }
 }
 
-void srsran_vec_gen_sine_simd(cf_t amplitude, float freq, cf_t* z, int len)
+cf_t srsran_vec_gen_sine_simd(cf_t amplitude, float freq, cf_t* z, int len)
 {
   const float TWOPI = 2.0f * (float)M_PI;
   cf_t        osc   = cexpf(_Complex_I * TWOPI * freq);
@@ -1687,27 +1717,28 @@ void srsran_vec_gen_sine_simd(cf_t amplitude, float freq, cf_t* z, int len)
 
     phase *= osc;
   }
+  return phase;
 }
 
 void srsran_vec_apply_cfo_simd(const cf_t* x, float cfo, cf_t* z, int len)
 {
   const float TWOPI = 2.0f * (float)M_PI;
   int         i     = 0;
+  cf_t        osc   = cexpf(_Complex_I * TWOPI * cfo);
+  cf_t        phase = 1.0f;
 
 #if SRSRAN_SIMD_CF_SIZE
-  srsran_simd_aligned cf_t _osc[SRSRAN_SIMD_CF_SIZE];
+  // Load initial phases and oscillator
   srsran_simd_aligned cf_t _phase[SRSRAN_SIMD_CF_SIZE];
-
-  if (i < len - SRSRAN_SIMD_CF_SIZE + 1) {
-    for (int k = 0; k < SRSRAN_SIMD_CF_SIZE; k++) {
-      _osc[k]   = cexpf(_Complex_I * TWOPI * cfo * SRSRAN_SIMD_CF_SIZE);
-      _phase[k] = cexpf(_Complex_I * TWOPI * cfo * k);
-    }
+  _phase[0] = phase;
+  for (int k = 1; k < SRSRAN_SIMD_CF_SIZE; k++) {
+    _phase[k] = _phase[k - 1] * osc;
   }
-  simd_cf_t _simd_osc   = srsran_simd_cfi_load(_osc);
+  simd_cf_t _simd_osc   = srsran_simd_cf_set1(_phase[SRSRAN_SIMD_CF_SIZE - 1] * osc);
   simd_cf_t _simd_phase = srsran_simd_cfi_load(_phase);
 
   if (SRSRAN_IS_ALIGNED(x) && SRSRAN_IS_ALIGNED(z)) {
+    // For aligned memory
     for (; i < len - SRSRAN_SIMD_CF_SIZE + 1; i += SRSRAN_SIMD_CF_SIZE) {
       simd_cf_t a = srsran_simd_cfi_load(&x[i]);
 
@@ -1718,6 +1749,7 @@ void srsran_vec_apply_cfo_simd(const cf_t* x, float cfo, cf_t* z, int len)
       _simd_phase = srsran_simd_cf_prod(_simd_phase, _simd_osc);
     }
   } else {
+    // For unaligned memory
     for (; i < len - SRSRAN_SIMD_F_SIZE + 1; i += SRSRAN_SIMD_F_SIZE) {
       simd_cf_t a = srsran_simd_cfi_loadu(&x[i]);
 
@@ -1728,9 +1760,12 @@ void srsran_vec_apply_cfo_simd(const cf_t* x, float cfo, cf_t* z, int len)
       _simd_phase = srsran_simd_cf_prod(_simd_phase, _simd_osc);
     }
   }
+
+  // Stores the next phase
+  srsran_simd_cfi_store(_phase, _simd_phase);
+  phase = _phase[0];
 #endif
-  cf_t osc   = cexpf(_Complex_I * TWOPI * cfo);
-  cf_t phase = cexpf(_Complex_I * TWOPI * cfo * i);
+
   for (; i < len; i++) {
     z[i] = x[i] * phase;
 

@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -34,6 +34,10 @@
 #include <stdio.h>
 
 #include "srsran/config.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef struct {
   uint32_t  nof_bits;
@@ -81,10 +85,16 @@ SRSRAN_API void srsran_bit_unpack_l(uint64_t value, uint8_t** bits, int nof_bits
 
 SRSRAN_API void srsran_bit_unpack(uint32_t value, uint8_t** bits, int nof_bits);
 
+SRSRAN_API void srsran_bit_unpack_lsb(uint32_t value, uint8_t** bits, int nof_bits);
+
 SRSRAN_API void srsran_bit_fprint(FILE* stream, uint8_t* bits, int nof_bits);
 
 SRSRAN_API uint32_t srsran_bit_diff(const uint8_t* x, const uint8_t* y, int nbits);
 
 SRSRAN_API uint32_t srsran_bit_count(uint32_t n);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // SRSRAN_BIT_H

@@ -1,5 +1,5 @@
 #
-# Copyright 2013-2021 Software Radio Systems Limited
+# Copyright 2013-2022 Software Radio Systems Limited
 #
 # This file is part of srsRAN
 #
@@ -17,6 +17,8 @@
 # the LICENSE file in the top-level directory of this distribution
 # and at http://www.gnu.org/licenses/.
 #
+
+add_subdirectory(test)
 
 set(SOURCES demux.cc dl_harq.cc mac.cc mux.cc proc_bsr.cc proc_phr.cc proc_ra.cc proc_sr.cc ul_harq.cc)
 add_library(srsue_mac STATIC ${SOURCES})

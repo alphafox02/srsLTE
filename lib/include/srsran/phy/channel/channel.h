@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -37,7 +37,7 @@ namespace srsran {
 class channel
 {
 public:
-  typedef struct {
+  struct args_t {
     // General
     bool enable = false;
 
@@ -67,7 +67,7 @@ public:
     bool     rlf_enable   = false;
     uint32_t rlf_t_on_ms  = 10000;
     uint32_t rlf_t_off_ms = 2000;
-  } args_t;
+  };
 
   channel(const args_t& channel_args, uint32_t _nof_channels, srslog::basic_logger& logger);
   ~channel();

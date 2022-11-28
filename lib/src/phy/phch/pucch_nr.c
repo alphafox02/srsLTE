@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -406,6 +406,8 @@ int srsran_pucch_nr_format1_encode(const srsran_pucch_nr_t*            q,
     srsran_mod_modulate(&q->qpsk, b, d, 2);
   }
 
+  INFO("[PUCCH Format 1 Data TX] d=%+.3f%+.3f", __real__ d[0], __imag__ d[0]);
+
   // Get group sequence
   uint32_t u = 0;
   uint32_t v = 0;
@@ -414,41 +416,60 @@ int srsran_pucch_nr_format1_encode(const srsran_pucch_nr_t*            q,
     return SRSRAN_ERROR;
   }
 
-  // Calculate number of symbols carrying PUCCH (No DMRS)
-  uint32_t n_pucch = pucch_nr_format1_n_pucch(resource, 0);
-
+  // First symbol of this PUCCH transmission
   uint32_t l_prime = resource->start_symbol_idx;
-  for (uint32_t l = 1, m = 0; l < resource->nof_symbols; l += 2, m++) {
-    // Get start of the sequence in resource grid
-    cf_t* slot_symbols_ptr = &slot_symbols[(q->carrier.nof_prb * (l + l_prime) + resource->starting_prb) * SRSRAN_NRE];
 
-    // Get Alpha index
-    uint32_t alpha_idx = 0;
-    if (srsran_pucch_nr_alpha_idx(&q->carrier, cfg, slot, l, l_prime, resource->initial_cyclic_shift, 0, &alpha_idx) <
-        SRSRAN_SUCCESS) {
-      return SRSRAN_ERROR;
+  // For each hop
+  for (uint32_t m_prime = 0, l = 1; m_prime < (resource->intra_slot_hopping ? 2 : 1); m_prime++) {
+    // Calculate number of symbols carrying PUCCH (No DMRS)
+    uint32_t n_pucch = pucch_nr_format1_n_pucch(resource, m_prime);
+
+    // Get the starting PRB
+    uint32_t starting_prb = (m_prime == 0) ? resource->starting_prb : resource->second_hop_prb;
+
+    // For each symbol carrying PUCCH data
+    for (uint32_t m = 0; m < n_pucch; m++, l += 2) {
+      // Get start of the sequence in resource grid
+      cf_t* slot_symbols_ptr = &slot_symbols[(q->carrier.nof_prb * (l + l_prime) + starting_prb) * SRSRAN_NRE];
+
+      // Get Alpha index
+      uint32_t alpha_idx = 0;
+      if (srsran_pucch_nr_alpha_idx(&q->carrier, cfg, slot, l, l_prime, resource->initial_cyclic_shift, 0, &alpha_idx) <
+          SRSRAN_SUCCESS) {
+        return SRSRAN_ERROR;
+      }
+
+      // get r_uv sequence from LUT object
+      const cf_t* r_uv = srsran_zc_sequence_lut_get(&q->r_uv_1prb, u, v, alpha_idx);
+      if (r_uv == NULL) {
+        ERROR("Getting r_uv sequence");
+        return SRSRAN_ERROR;
+      }
+
+      // Get w_i_m
+      cf_t w_i_m = srsran_pucch_nr_format1_w(q, n_pucch, resource->time_domain_occ, m);
+
+      // Compute z(n) = w(i) * r_uv(n)
+      cf_t z[SRSRAN_NRE];
+      srsran_vec_sc_prod_ccc(r_uv, w_i_m, z, SRSRAN_NRE);
+
+      if (SRSRAN_DEBUG_ENABLED && get_srsran_verbose_level() >= SRSRAN_VERBOSE_INFO && !is_handler_registered()) {
+        printf("[PUCCH Format 1 Data TX] m_prime=%d; m=%d; w_i_m=%+.3f%+.3f z=",
+               m_prime,
+               m,
+               __real__ w_i_m,
+               __imag__ w_i_m);
+        srsran_vec_fprint_c(stdout, z, SRSRAN_NRE);
+      }
+
+      // Put z in the grid
+      srsran_vec_sc_prod_ccc(z, d[0], slot_symbols_ptr, SRSRAN_NRE);
+
+      if (SRSRAN_DEBUG_ENABLED && get_srsran_verbose_level() >= SRSRAN_VERBOSE_INFO && !is_handler_registered()) {
+        printf("[PUCCH Format 1 TX] l=%d; x=", l + l_prime);
+        srsran_vec_fprint_c(stdout, slot_symbols_ptr, SRSRAN_NRE);
+      }
     }
-
-    // get r_uv sequence from LUT object
-    const cf_t* r_uv = srsran_zc_sequence_lut_get(&q->r_uv_1prb, u, v, alpha_idx);
-    if (r_uv == NULL) {
-      ERROR("Getting r_uv sequence");
-      return SRSRAN_ERROR;
-    }
-
-    // Compute y = d(0) * r_uv
-    cf_t y[SRSRAN_NRE];
-    srsran_vec_sc_prod_ccc(r_uv, d[0], y, SRSRAN_NRE);
-
-    // Get w_i_m
-    cf_t w_i_m = srsran_pucch_nr_format1_w(q, n_pucch, resource->time_domain_occ, m);
-
-    // Compute z(n) = w(i) * y(n)
-    cf_t z[SRSRAN_NRE];
-    srsran_vec_sc_prod_ccc(y, w_i_m, z, SRSRAN_NRE);
-
-    // Put z in the grid
-    srsran_vec_cf_copy(slot_symbols_ptr, z, SRSRAN_NRE);
   }
 
   return SRSRAN_SUCCESS;
@@ -461,7 +482,8 @@ int srsran_pucch_nr_format1_decode(srsran_pucch_nr_t*                  q,
                                    srsran_chest_ul_res_t*              chest_res,
                                    cf_t*                               slot_symbols,
                                    uint8_t                             b[SRSRAN_PUCCH_NR_FORMAT1_MAX_NOF_BITS],
-                                   uint32_t                            nof_bits)
+                                   uint32_t                            nof_bits,
+                                   float*                              norm_corr)
 {
   uint32_t m_cs = 0;
 
@@ -480,8 +502,9 @@ int srsran_pucch_nr_format1_decode(srsran_pucch_nr_t*                  q,
     return SRSRAN_ERROR;
   }
 
-  // Received symbol d
-  cf_t d = 0;
+  // Accumulates received symbol d and average power
+  cf_t  d       = 0;
+  float pwr_acc = 0.0f;
 
   // Get group sequence
   uint32_t u = 0;
@@ -491,50 +514,100 @@ int srsran_pucch_nr_format1_decode(srsran_pucch_nr_t*                  q,
     return SRSRAN_ERROR;
   }
 
-  // Calculate number of symbols carrying PUCCH (No DMRS)
-  uint32_t n_pucch = pucch_nr_format1_n_pucch(resource, 0);
-
+  // First symbol of this PUCCH transmission
   uint32_t l_prime = resource->start_symbol_idx;
-  for (uint32_t l = 1, m = 0; l < resource->nof_symbols; l += 2, m++) {
-    // Get start of the sequence in resource grid
-    cf_t* slot_symbols_ptr = &slot_symbols[(q->carrier.nof_prb * (l + l_prime) + resource->starting_prb) * SRSRAN_NRE];
-    cf_t* ce_ptr           = &chest_res->ce[(q->carrier.nof_prb * (l + l_prime) + resource->starting_prb) * SRSRAN_NRE];
 
-    // Equalise x = w(i) * d' * r_uv(n)
-    cf_t x[SRSRAN_NRE];
-    srsran_predecoding_single(slot_symbols_ptr, ce_ptr, x, NULL, SRSRAN_NRE, 1.0f, chest_res->noise_estimate);
+  // For each hop
+  uint32_t n_pucch_sum = 0;
+  for (uint32_t m_prime = 0, l = 1; m_prime < (resource->intra_slot_hopping ? 2 : 1); m_prime++) {
+    // Calculate number of symbols carrying PUCCH (No DMRS)
+    uint32_t n_pucch = pucch_nr_format1_n_pucch(resource, m_prime);
 
-    // Get Alpha index
-    uint32_t alpha_idx = 0;
-    if (srsran_pucch_nr_alpha_idx(
-            &q->carrier, cfg, slot, l, l_prime, resource->initial_cyclic_shift, m_cs, &alpha_idx) < SRSRAN_SUCCESS) {
-      return SRSRAN_ERROR;
+    // Get the starting PRB
+    uint32_t starting_prb = (m_prime == 0) ? resource->starting_prb : resource->second_hop_prb;
+
+    // For each symbol carrying PUCCH data
+    for (uint32_t m = 0; m < n_pucch; m++, l += 2) {
+      // Get start of the sequence in resource grid
+      cf_t* slot_symbols_ptr = &slot_symbols[(q->carrier.nof_prb * (l + l_prime) + starting_prb) * SRSRAN_NRE];
+      cf_t* ce_ptr           = &chest_res->ce[SRSRAN_NRE * n_pucch_sum];
+      n_pucch_sum++;
+
+      if (SRSRAN_DEBUG_ENABLED && get_srsran_verbose_level() >= SRSRAN_VERBOSE_INFO && !is_handler_registered()) {
+        printf("[PUCCH Format 1 CE   RX] ce=");
+        srsran_vec_fprint_c(stdout, ce_ptr, SRSRAN_NRE);
+      }
+
+      // Equalise x = w(i) * d' * r_uv(n)
+      cf_t x[SRSRAN_NRE];
+      srsran_predecoding_single(slot_symbols_ptr, ce_ptr, x, NULL, SRSRAN_NRE, 1.0f, chest_res->noise_estimate);
+
+      if (SRSRAN_DEBUG_ENABLED && get_srsran_verbose_level() >= SRSRAN_VERBOSE_INFO && !is_handler_registered()) {
+        printf("[PUCCH Format 1 RX] l=%d; x=", l + l_prime);
+        srsran_vec_fprint_c(stdout, x, SRSRAN_NRE);
+      }
+
+      // Get Alpha index
+      uint32_t alpha_idx = 0;
+      if (srsran_pucch_nr_alpha_idx(
+              &q->carrier, cfg, slot, l, l_prime, resource->initial_cyclic_shift, m_cs, &alpha_idx) < SRSRAN_SUCCESS) {
+        return SRSRAN_ERROR;
+      }
+
+      // get r_uv sequence from LUT object
+      const cf_t* r_uv = srsran_zc_sequence_lut_get(&q->r_uv_1prb, u, v, alpha_idx);
+      if (r_uv == NULL) {
+        ERROR("Getting r_uv sequence");
+        return SRSRAN_ERROR;
+      }
+
+      // Get w_i_m
+      cf_t w_i_m = srsran_pucch_nr_format1_w(q, n_pucch, resource->time_domain_occ, m);
+
+      // Compute z(n) = w(i) * r_uv(n)
+      cf_t z[SRSRAN_NRE];
+      srsran_vec_sc_prod_ccc(r_uv, w_i_m, z, SRSRAN_NRE);
+
+      if (SRSRAN_DEBUG_ENABLED && get_srsran_verbose_level() >= SRSRAN_VERBOSE_INFO && !is_handler_registered()) {
+        printf("[PUCCH Format 1 Data RX] m_prime=%d; m=%d; w_i_m=%+.3f%+.3f z=",
+               m_prime,
+               m,
+               __real__ w_i_m,
+               __imag__ w_i_m);
+        srsran_vec_fprint_c(stdout, z, SRSRAN_NRE);
+      }
+
+      // Compute d = sum(x * conj(w(i) * r_uv(n))) = sum(w(i) * d' * r_uv(n) * conj(w(i) * r_uv(n))) = d'
+      d += srsran_vec_dot_prod_conj_ccc(x, z, SRSRAN_NRE) / SRSRAN_NRE;
+
+      // Compute and accumulate average symbol power
+      pwr_acc += srsran_vec_avg_power_cf(x, SRSRAN_NRE);
     }
-
-    // get r_uv sequence from LUT object
-    const cf_t* r_uv = srsran_zc_sequence_lut_get(&q->r_uv_1prb, u, v, alpha_idx);
-    if (r_uv == NULL) {
-      ERROR("Getting r_uv sequence");
-      return SRSRAN_ERROR;
-    }
-    // Get w_i_m
-    cf_t w_i_m = srsran_pucch_nr_format1_w(q, n_pucch, resource->time_domain_occ, m);
-
-    // Compute z(n) = w(i) * r_uv(n)
-    cf_t z[SRSRAN_NRE];
-    srsran_vec_sc_prod_ccc(r_uv, w_i_m, z, SRSRAN_NRE);
-
-    // Compute d = sum(x * conj(w(i) * r_uv(n))) = sum(w(i) * d' * r_uv(n) * conj(w(i) * r_uv(n))) = d'
-    d += srsran_vec_dot_prod_conj_ccc(x, z, SRSRAN_NRE);
   }
+
+  INFO("[PUCCH Format 1 Data RX] d=%+.3f%+.3f", __real__ d, __imag__ d);
 
   // Demodulate d
   float llr[SRSRAN_PUCCH_NR_FORMAT1_MAX_NOF_BITS];
   srsran_demod_soft_demodulate((nof_bits == 1) ? SRSRAN_MOD_BPSK : SRSRAN_MOD_QPSK, &d, llr, 1);
 
-  // Hard decision
+  // Hard decision based on the LLRs sign
   for (uint32_t i = 0; i < nof_bits; i++) {
     b[i] = llr[i] > 0.0f ? 1 : 0;
+  }
+
+  // Calculate normalised correlation, it uses the absolute value of d and accumulated average power
+  if (norm_corr != NULL) {
+    // Get the number of payload symbols. As the one of every 2 symbols carry DMRS, the payload symbols is half of the
+    // total symbols rounding down
+    float nsymb = (float)SRSRAN_FLOOR(resource->nof_symbols, 2);
+
+    // Avoid zero, INF or NAN division, set correlation to 0 in this case
+    if (isnormal(pwr_acc) && isnormal(nsymb)) {
+      *norm_corr = cabsf(d) / sqrtf(pwr_acc * nsymb);
+    } else {
+      *norm_corr = 0.0f;
+    }
   }
 
   return SRSRAN_SUCCESS;
@@ -562,7 +635,7 @@ static int pucch_nr_format2_encode(srsran_pucch_nr_t*                  q,
     return SRSRAN_ERROR;
   }
 
-  // Calculate number of encoded symbols
+  // Calculate number of encoded bits
   int e = srsran_uci_nr_pucch_format_2_3_4_E(resource);
   if (e < SRSRAN_SUCCESS) {
     ERROR("Error selecting E");
@@ -607,8 +680,13 @@ static int pucch_nr_format2_decode(srsran_pucch_nr_t*                  q,
     return SRSRAN_ERROR;
   }
 
-  // Calculate number of encoded symbols
-  uint32_t E = srsran_uci_nr_pucch_format_2_3_4_E(resource);
+  // Calculate number of encoded bits
+  int e = srsran_uci_nr_pucch_format_2_3_4_E(resource);
+  if (e < SRSRAN_SUCCESS) {
+    ERROR("Error selecting E");
+    return SRSRAN_ERROR;
+  }
+  uint32_t E = (uint32_t)e;
 
   // Undo mapping to physical resources
   uint32_t l_start = resource->start_symbol_idx;
@@ -628,7 +706,7 @@ static int pucch_nr_format2_decode(srsran_pucch_nr_t*                  q,
     }
   }
 
-  if (SRSRAN_DEBUG_ENABLED && srsran_verbose >= SRSRAN_VERBOSE_INFO && !handler_registered) {
+  if (SRSRAN_DEBUG_ENABLED && get_srsran_verbose_level() >= SRSRAN_VERBOSE_INFO && !is_handler_registered()) {
     INFO("d=");
     srsran_vec_fprint_c(stdout, q->d, resource->nof_symbols * resource->nof_prb * (SRSRAN_NRE - 4));
     INFO("ce=");
@@ -636,13 +714,13 @@ static int pucch_nr_format2_decode(srsran_pucch_nr_t*                  q,
   }
 
   // Equalise
-  if (srsran_predecoding_single(q->d, q->ce, q->d, NULL, E, 1.0f, chest_res->noise_estimate) < SRSRAN_SUCCESS) {
+  if (srsran_predecoding_single(q->d, q->ce, q->d, NULL, E / 2, 1.0f, chest_res->noise_estimate) < SRSRAN_SUCCESS) {
     ERROR("Error Pre-decoding");
     return SRSRAN_ERROR;
   }
 
   // Soft-demodulate
-  if (srsran_demod_soft_demodulate_b(SRSRAN_MOD_QPSK, q->d, llr, E) < SRSRAN_SUCCESS) {
+  if (srsran_demod_soft_demodulate_b(SRSRAN_MOD_QPSK, q->d, llr, E / 2) < SRSRAN_SUCCESS) {
     ERROR("Error soft-demodulate");
     return SRSRAN_ERROR;
   }
@@ -771,10 +849,10 @@ static uint32_t pucch_nr_resource_info(const srsran_pucch_nr_resource_t* r, char
   return len;
 }
 
-uint32_t srsran_pucch_nr_tx_info(const srsran_pucch_nr_resource_t* resource,
-                                 const srsran_uci_data_nr_t*       uci_data,
-                                 char*                             str,
-                                 uint32_t                          str_len)
+uint32_t srsran_pucch_nr_info(const srsran_pucch_nr_resource_t* resource,
+                              const srsran_uci_data_nr_t*       uci_data,
+                              char*                             str,
+                              uint32_t                          str_len)
 {
   uint32_t len = 0;
 

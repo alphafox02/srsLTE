@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -59,10 +59,11 @@ private:
   std::string       float_to_eng_string(float f, int digits);
   void              print_table(const bool display_neighbours, const bool is_nr);
 
-  bool                  do_print             = false;
+  std::atomic<bool>     do_print             = {false};
   bool                  table_has_neighbours = false; ///< state of last table head
   uint8_t               n_reports            = 10;
   ue_metrics_interface* ue                   = nullptr;
+  std::mutex            mutex;
 };
 
 } // namespace srsue

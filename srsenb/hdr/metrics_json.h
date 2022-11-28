@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -35,10 +35,9 @@ namespace srsenb {
 class metrics_json : public srsran::metrics_listener<enb_metrics_t>
 {
 public:
-  metrics_json(srslog::log_channel& c) : log_c(c) {}
+  metrics_json(srslog::log_channel& c, enb_metrics_interface* enb_) : log_c(c), enb(enb_) {}
 
   void set_metrics(const enb_metrics_t& m, const uint32_t period_usec) override;
-  void set_handle(enb_metrics_interface* enb_);
   void stop() override {}
 
 private:

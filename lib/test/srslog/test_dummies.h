@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -23,6 +23,7 @@
 #define TEST_DUMMIES
 
 #include "srsran/srslog/detail/log_backend.h"
+#include "srsran/srslog/shared_types.h"
 #include "srsran/srslog/sink.h"
 
 namespace test_dummies {
@@ -76,7 +77,7 @@ public:
 class backend_dummy : public srslog::detail::log_backend
 {
 public:
-  void start() override {}
+  void start(srslog::backend_priority priority) override {}
 
   bool push(srslog::detail::log_entry&& entry) override { return true; }
 

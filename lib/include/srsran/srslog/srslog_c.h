@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -157,9 +157,10 @@ srslog_sink* srslog_fetch_stderr_sink(void);
  * Specifying a max_size value different to zero will make the sink create a
  * new file each time the current file exceeds this value. The units of
  * max_size are bytes.
+ * Setting force_flush to true will flush the sink after every write.
  * NOTE: Any '#' characters in the id will get removed.
  */
-srslog_sink* srslog_fetch_file_sink(const char* path, size_t max_size);
+srslog_sink* srslog_fetch_file_sink(const char* path, size_t max_size, srslog_bool force_flush);
 
 #ifdef __cplusplus
 }

@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -238,7 +238,7 @@ static uint32_t phch_cfg_uci_to_str(const srsran_uci_cfg_nr_t* uci, char* str, u
   len = srsran_print_check(str, str_len, len, "    beta_csi_part1_offset=%.2f\n", uci->pusch.beta_csi1_offset);
   len = srsran_print_check(str, str_len, len, "    beta_csi_part2_offset=%.2f\n", uci->pusch.beta_csi1_offset);
   len = srsran_print_check(str, str_len, len, "    o_csi1=%d\n", srsran_csi_part1_nof_bits(uci->csi, uci->nof_csi));
-  len = srsran_print_check(str, str_len, len, "    o_ack=%d\n", uci->o_ack);
+  len = srsran_print_check(str, str_len, len, "    o_ack=%d\n", uci->ack.count);
 
   return len;
 }
@@ -260,7 +260,7 @@ uint32_t srsran_sch_cfg_nr_info(const srsran_sch_cfg_nr_t* sch_cfg, char* str, u
   // Append SCH information
   len += phch_cfg_sch_to_str(&sch_cfg->sch_cfg, &str[len], str_len - len);
 
-  // Append SCH information
+  // Append reserved RE information
   len += phch_cfg_rvd_to_str(&sch_cfg->rvd_re, &str[len], str_len - len);
 
   // UCI configuration

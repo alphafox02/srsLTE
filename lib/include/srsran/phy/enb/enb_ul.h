@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -53,6 +53,7 @@ typedef struct SRSRAN_API {
   srsran_cell_t cell;
 
   cf_t*                 sf_symbols;
+  cf_t*                 in_buffer;
   srsran_chest_ul_res_t chest_res;
 
   srsran_ofdm_t     fft;

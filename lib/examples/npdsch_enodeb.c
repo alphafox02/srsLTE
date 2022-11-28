@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -170,7 +170,7 @@ void parse_args(int argc, char** argv)
         cell.nbiot_prb = (uint32_t)strtol(argv[optind], NULL, 10);
         break;
       case 'v':
-        srsran_verbose++;
+        increase_srsran_verbose_level();
         break;
       default:
         usage(argv[0]);
@@ -692,10 +692,9 @@ int main(int argc, char** argv)
         // find the noise spectral density
         float snr_lin = srsran_convert_dB_to_power(file_snr);
         float n0      = abs_avg / snr_lin;
-        float nstd    = sqrtf(n0 / 2);
 
         // add some noise to the signal
-        srsran_ch_awgn_c(output_buffer, output_buffer, nstd, sf_n_samples);
+        srsran_ch_awgn_c(output_buffer, output_buffer, n0, sf_n_samples);
       }
 
       /* send to file or usrp */

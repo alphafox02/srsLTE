@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -70,6 +70,8 @@ typedef struct {
   bool        metrics_csv_append;
   int         metrics_csv_flush_period_sec;
   std::string metrics_csv_filename;
+  bool        metrics_json_enable;
+  std::string metrics_json_filename;
   bool        tracing_enable;
   std::string tracing_filename;
   std::size_t tracing_buffcapacity;
@@ -112,6 +114,7 @@ public:
 private:
   // UE consists of a radio, a PHY and a stack element
   std::unique_ptr<ue_phy_base>        phy;
+  std::unique_ptr<ue_phy_base>        dummy_phy;
   std::unique_ptr<srsran::radio_base> radio;
   std::unique_ptr<ue_stack_base>      stack;
   std::unique_ptr<gw>                 gw_inst;

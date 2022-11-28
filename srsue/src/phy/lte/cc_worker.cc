@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -56,6 +56,8 @@ cc_worker::cc_worker(uint32_t cc_idx_, uint32_t max_prb, srsue::phy_common* phy_
   cc_idx = cc_idx_;
   phy    = phy_;
 
+  srsran_cfr_cfg_t cfr_config = phy->get_cfr_config();
+
   signal_buffer_max_samples = 3 * SRSRAN_SF_LEN_PRB(max_prb);
 
   for (uint32_t i = 0; i < phy->args->nof_rx_ant; i++) {
@@ -81,6 +83,11 @@ cc_worker::cc_worker(uint32_t cc_idx_, uint32_t max_prb, srsue::phy_common* phy_
     return;
   }
 
+  if (srsran_ue_ul_set_cfr(&ue_ul, &cfr_config) < SRSRAN_SUCCESS) {
+    Error("Setting the CFR");
+    return;
+  }
+
   phy->set_ue_dl_cfg(&ue_dl_cfg);
   phy->set_ue_ul_cfg(&ue_ul_cfg);
   phy->set_pdsch_cfg(&ue_dl_cfg.cfg.pdsch);
@@ -94,6 +101,7 @@ cc_worker::cc_worker(uint32_t cc_idx_, uint32_t max_prb, srsue::phy_common* phy_
 
   chest_default_cfg = ue_dl_cfg.chest_cfg;
 
+  srsran_softbuffer_rx_init(&mch_softbuffer, 100);
   // Set default PHY params
   reset();
 
@@ -113,6 +121,7 @@ cc_worker::~cc_worker()
       free(signal_buffer_rx[i]);
     }
   }
+  srsran_softbuffer_rx_free(&mch_softbuffer);
   srsran_ue_dl_free(&ue_dl);
   srsran_ue_ul_free(&ue_ul);
 }
@@ -121,15 +130,15 @@ void cc_worker::reset()
 {
   // constructor sets defaults
   srsran::phy_cfg_t empty_cfg;
-  set_config_unlocked(empty_cfg);
+  set_config_nolock(empty_cfg);
 }
 
-void cc_worker::reset_cell_unlocked()
+void cc_worker::reset_cell_nolock()
 {
   cell_initiated = false;
 }
 
-bool cc_worker::set_cell_unlocked(srsran_cell_t cell_)
+bool cc_worker::set_cell_nolock(srsran_cell_t cell_)
 {
   if (cell.id != cell_.id || !cell_initiated) {
     cell = cell_;
@@ -180,7 +189,7 @@ void cc_worker::set_tti(uint32_t tti)
   sf_cfg_ul.shortened = false;
 }
 
-void cc_worker::set_cfo_unlocked(float cfo)
+void cc_worker::set_cfo_nolock(float cfo)
 {
   ue_ul_cfg.cfo_value = cfo;
 }
@@ -190,15 +199,10 @@ float cc_worker::get_ref_cfo() const
   return ue_dl.chest_res.cfo;
 }
 
-void cc_worker::set_tdd_config_unlocked(srsran_tdd_config_t config)
+void cc_worker::set_tdd_config_nolock(srsran_tdd_config_t config)
 {
   sf_cfg_dl.tdd_config = config;
   sf_cfg_ul.tdd_config = config;
-}
-
-void cc_worker::enable_pregen_signals_unlocked(bool enabled)
-{
-  pregen_enabled = enabled;
 }
 
 /************
@@ -263,24 +267,29 @@ bool cc_worker::work_dl_regular()
 
   // If found a dci for this carrier, generate a grant, pass it to MAC and decode the associated PDSCH
   if (has_dl_grant) {
-    // Read last TB from last retx for this pid
-    for (uint32_t i = 0; i < SRSRAN_MAX_CODEWORDS; i++) {
-      ue_dl_cfg.cfg.pdsch.grant.last_tbs[i] = phy->last_dl_tbs[dci_dl.pid][cc_idx][i];
-    }
-    // Generate PHY grant
-    if (srsran_ue_dl_dci_to_pdsch_grant(&ue_dl, &sf_cfg_dl, &ue_dl_cfg, &dci_dl, &ue_dl_cfg.cfg.pdsch.grant)) {
-      Info("Converting DCI message to DL dci");
-      return false;
-    }
+    // PDCCH order has no associated PDSCH to decode
+    if (not dci_dl.is_pdcch_order) {
+      // Read last TB from last retx for this pid
+      for (uint32_t i = 0; i < SRSRAN_MAX_CODEWORDS; i++) {
+        ue_dl_cfg.cfg.pdsch.grant.last_tbs[i] = phy->last_dl_tbs[dci_dl.pid][cc_idx][i];
+      }
+      // Generate PHY grant
+      if (srsran_ue_dl_dci_to_pdsch_grant(&ue_dl, &sf_cfg_dl, &ue_dl_cfg, &dci_dl, &ue_dl_cfg.cfg.pdsch.grant)) {
+        Info("Converting DCI message to DL dci");
+        return false;
+      }
 
-    // Save TB for next retx
-    for (uint32_t i = 0; i < SRSRAN_MAX_CODEWORDS; i++) {
-      phy->last_dl_tbs[dci_dl.pid][cc_idx][i] = ue_dl_cfg.cfg.pdsch.grant.last_tbs[i];
+      // Save TB for next retx
+      for (uint32_t i = 0; i < SRSRAN_MAX_CODEWORDS; i++) {
+        phy->last_dl_tbs[dci_dl.pid][cc_idx][i] = ue_dl_cfg.cfg.pdsch.grant.last_tbs[i];
+      }
+
+      // Set RNTI
+      ue_dl_cfg.cfg.pdsch.rnti = dci_dl.rnti;
+    } else {
+      ue_dl_cfg.cfg.pdsch.rnti            = dci_dl.rnti;
+      ue_dl_cfg.cfg.pdsch.grant.tb[0].tbs = 0;
     }
-
-    // Set RNTI
-    ue_dl_cfg.cfg.pdsch.rnti = dci_dl.rnti;
-
     // Generate MAC grant
     mac_interface_phy_lte::mac_grant_dl_t mac_grant = {};
     dl_phy_to_mac_grant(&ue_dl_cfg.cfg.pdsch.grant, &dci_dl, &mac_grant);
@@ -294,7 +303,12 @@ bool cc_worker::work_dl_regular()
     // Decode PDSCH
     decode_pdsch(ack_resource, &dl_action, dl_ack);
 
-    // Informs Stack about the decoding status
+    // Informs Stack about the decoding status, send NACK if cell is in process of re-selection
+    if (phy->cell_is_selecting) {
+      for (uint32_t i = 0; i < SRSRAN_MAX_CODEWORDS; i++) {
+        dl_ack[i] = false;
+      }
+    }
     phy->stack->tb_decoded(cc_idx, mac_grant, dl_ack);
   }
 
@@ -341,12 +355,12 @@ bool cc_worker::work_dl_mbsfn(srsran_mbsfn_cfg_t mbsfn_cfg)
     srsran_ra_dl_compute_nof_re(&cell, &sf_cfg_dl, &pmch_cfg.pdsch_cfg.grant);
 
     // Send grant to MAC and get action for this TB, then call tb_decoded to unlock MAC
-    phy->stack->new_mch_dl(pmch_cfg.pdsch_cfg.grant, &dl_action);
+    new_mch_dl(&dl_action);
     bool mch_decoded = true;
     if (!decode_pmch(&dl_action, &mbsfn_cfg)) {
       mch_decoded = false;
     }
-    phy->stack->mch_decoded((uint32_t)pmch_cfg.pdsch_cfg.grant.tb[0].tbs / 8, mch_decoded);
+    phy->stack->mch_decoded((uint32_t)pmch_cfg.pdsch_cfg.grant.tb[0].tbs / 8, mch_decoded, mch_payload_buffer);
   } else if (mbsfn_cfg.is_mcch) {
     // release lock in phy_common
     phy->set_mch_period_stop(0);
@@ -363,9 +377,14 @@ void cc_worker::dl_phy_to_mac_grant(srsran_pdsch_grant_t*                       
                                     srsue::mac_interface_phy_lte::mac_grant_dl_t* mac_grant)
 {
   /* Fill MAC dci structure */
-  mac_grant->pid  = dl_dci->pid;
-  mac_grant->rnti = dl_dci->rnti;
-  mac_grant->tti  = CURRENT_TTI;
+  mac_grant->pid            = dl_dci->pid;
+  mac_grant->rnti           = dl_dci->rnti;
+  mac_grant->tti            = CURRENT_TTI;
+  mac_grant->is_pdcch_order = dl_dci->is_pdcch_order;
+  if (dl_dci->is_pdcch_order) {
+    mac_grant->preamble_idx   = dl_dci->preamble_idx;
+    mac_grant->prach_mask_idx = dl_dci->prach_mask_idx;
+  }
 
   for (int i = 0; i < SRSRAN_MAX_CODEWORDS; i++) {
     mac_grant->tb[i].ndi         = dl_dci->tb[i].ndi;
@@ -563,6 +582,11 @@ void cc_worker::decode_phich()
 
 void cc_worker::update_measurements(std::vector<phy_meas_t>& serving_cells, cf_t* rssi_power_buffer)
 {
+  // Do not update any measurement if the CC is not configured to prevent false or inaccurate data
+  if (not phy->cell_state.is_configured(cc_idx)) {
+    return;
+  }
+
   phy->update_measurements(
       cc_idx, ue_dl.chest_res, sf_cfg_dl, ue_dl_cfg.cfg.pdsch.rs_power, serving_cells, rssi_power_buffer);
 }
@@ -793,12 +817,10 @@ bool cc_worker::encode_uplink(mac_interface_phy_lte::tb_action_ul_t* action, srs
 
 void cc_worker::set_uci_sr(srsran_uci_data_t* uci_data)
 {
-  Debug("set_uci_sr() query: sr_enabled=%d, last_tx_tti=%d", phy->sr_enabled, phy->sr_last_tx_tti);
-  if (srsran_ue_ul_gen_sr(&ue_ul_cfg, &sf_cfg_ul, uci_data, phy->sr_enabled)) {
-    if (phy->sr_enabled) {
-      phy->sr_last_tx_tti = CURRENT_TTI_TX;
-      phy->sr_enabled     = false;
-      Debug("set_uci_sr() sending SR: sr_enabled=%d, last_tx_tti=%d", phy->sr_enabled, phy->sr_last_tx_tti);
+  Debug("set_uci_sr() query: sr_enabled=%d, last_tx_tti=%d", phy->sr.is_triggered(), phy->sr.get_last_tx_tti());
+  if (srsran_ue_ul_gen_sr(&ue_ul_cfg, &sf_cfg_ul, uci_data, phy->sr.is_triggered())) {
+    if (phy->sr.set_last_tx_tti(CURRENT_TTI_TX)) {
+      Debug("set_uci_sr() sending SR: sr_enabled=true, last_tx_tti=%d", CURRENT_TTI_TX);
     }
   }
 }
@@ -821,10 +843,16 @@ uint32_t cc_worker::get_wideband_cqi()
 
 void cc_worker::set_uci_periodic_cqi(srsran_uci_data_t* uci_data)
 {
+  // Load last reported RI
+  ue_dl_cfg.last_ri = phy->last_ri;
+
   srsran_ue_dl_gen_cqi_periodic(&ue_dl, &ue_dl_cfg, get_wideband_cqi(), CURRENT_TTI_TX, uci_data);
 
   // Store serving cell index for logging purposes
   uci_data->cfg.cqi.scell_index = cc_idx;
+
+  // Store the reported RI
+  phy->last_ri = ue_dl_cfg.last_ri;
 }
 
 void cc_worker::set_uci_aperiodic_cqi(srsran_uci_data_t* uci_data)
@@ -874,23 +902,16 @@ void cc_worker::set_uci_ack(srsran_uci_data_t* uci_data,
 
 /* Translates RRC structs into PHY structs
  */
-void cc_worker::set_config_unlocked(srsran::phy_cfg_t& phy_cfg)
+void cc_worker::set_config_nolock(const srsran::phy_cfg_t& phy_cfg)
 {
   // Save configuration
   ue_dl_cfg.cfg    = phy_cfg.dl_cfg;
   ue_ul_cfg.ul_cfg = phy_cfg.ul_cfg;
 
   phy->set_pdsch_cfg(&ue_dl_cfg.cfg.pdsch);
-
-  // Update signals
-  if (pregen_enabled) {
-    Info("Pre-generating UL signals...");
-    srsran_ue_ul_pregen_signals(&ue_ul, &ue_ul_cfg);
-    Info("Done pre-generating signals worker...");
-  }
 }
 
-void cc_worker::upd_config_dci_unlocked(srsran_dci_cfg_t& dci_cfg)
+void cc_worker::upd_config_dci_nolock(const srsran_dci_cfg_t& dci_cfg)
 {
   ue_dl_cfg.cfg.dci = dci_cfg;
 }
@@ -908,6 +929,15 @@ int cc_worker::read_pdsch_d(cf_t* pdsch_d)
 {
   memcpy(pdsch_d, ue_dl.pdsch.d[0], ue_dl_cfg.cfg.pdsch.grant.nof_re * sizeof(cf_t));
   return ue_dl_cfg.cfg.pdsch.grant.nof_re;
+}
+
+void cc_worker::new_mch_dl(mac_interface_phy_lte::tb_action_dl_t* action)
+{
+  action->generate_ack        = false;
+  action->tb[0].enabled       = true;
+  action->tb[0].payload       = mch_payload_buffer;
+  action->tb[0].softbuffer.rx = &mch_softbuffer;
+  srsran_softbuffer_rx_reset_cb(&mch_softbuffer, 1);
 }
 
 } // namespace lte

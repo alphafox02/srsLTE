@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -35,6 +35,16 @@ class security_cfg_handler
 {
 public:
   explicit security_cfg_handler(const rrc_cfg_t& cfg_) : cfg(&cfg_), logger(srslog::fetch_basic_logger("RRC")) {}
+  explicit security_cfg_handler(const security_cfg_handler& other) : logger(srslog::fetch_basic_logger("RRC"))
+  {
+    cfg                   = other.cfg;
+    k_enb_present         = other.k_enb_present;
+    security_capabilities = other.security_capabilities;
+    std::copy(other.k_enb, other.k_enb + 32, k_enb);
+    sec_cfg = other.sec_cfg;
+    ncc     = other.ncc;
+  }
+
   security_cfg_handler& operator=(const security_cfg_handler& other)
   {
     cfg                   = other.cfg;
@@ -92,12 +102,12 @@ public:
   /// Called after RRCReestablishmentComplete, to add E-RABs of old rnti
   void reestablish_bearers(bearer_cfg_handler&& old_rnti_bearers);
 
-  int  add_erab(uint8_t                                            erab_id,
-                const asn1::s1ap::erab_level_qos_params_s&         qos,
-                const asn1::bounded_bitstring<1, 160, true, true>& addr,
-                uint32_t                                           teid_out,
-                srsran::const_span<uint8_t>                        nas_pdu,
-                asn1::s1ap::cause_c&                               cause);
+  int  addmod_erab(uint8_t                                            erab_id,
+                   const asn1::s1ap::erab_level_qos_params_s&         qos,
+                   const asn1::bounded_bitstring<1, 160, true, true>& addr,
+                   uint32_t                                           teid_out,
+                   srsran::const_span<uint8_t>                        nas_pdu,
+                   asn1::s1ap::cause_c&                               cause);
   int  release_erab(uint8_t erab_id);
   void release_erabs();
   int  modify_erab(uint8_t                                    erab_id,

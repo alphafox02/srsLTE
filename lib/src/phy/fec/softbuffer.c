@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -166,6 +166,15 @@ void srsran_softbuffer_rx_reset_cb(srsran_softbuffer_rx_t* q, uint32_t nof_cb)
     SRSRAN_MEM_ZERO(q->cb_crc, bool, q->max_cb);
   }
   q->tb_crc = false;
+}
+
+void srsran_softbuffer_rx_reset_cb_crc(srsran_softbuffer_rx_t* q, uint32_t nof_cb)
+{
+  if (q == NULL || nof_cb == 0) {
+    return;
+  }
+
+  SRSRAN_MEM_ZERO(q->cb_crc, bool, SRSRAN_MIN(q->max_cb, nof_cb));
 }
 
 int srsran_softbuffer_tx_init(srsran_softbuffer_tx_t* q, uint32_t nof_prb)

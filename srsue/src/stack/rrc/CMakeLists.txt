@@ -1,5 +1,5 @@
 #
-# Copyright 2013-2021 Software Radio Systems Limited
+# Copyright 2013-2022 Software Radio Systems Limited
 #
 # This file is part of srsRAN
 #
@@ -18,9 +18,7 @@
 # and at http://www.gnu.org/licenses/.
 #
 
-set(SOURCES rrc.cc rrc_procedures.cc rrc_meas.cc rrc_cell.cc phy_controller.cc)
+add_subdirectory(test)
+
+set(SOURCES rrc.cc rrc_procedures.cc rrc_meas.cc rrc_cell.cc rrc_rlf_report.cc phy_controller.cc)
 add_library(srsue_rrc STATIC ${SOURCES})
-
-set(SOURCES rrc_nr.cc)
-add_library(srsue_rrc_nr STATIC ${SOURCES})
-

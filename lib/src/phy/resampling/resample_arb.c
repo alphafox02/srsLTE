@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -152,11 +152,7 @@ int srsran_resample_arb_compute(srsran_resample_arb_t* q, cf_t* input, cf_t* out
           filter_input, srsran_resample_arb_polyfilt[(idx + 1) % SRSRAN_RESAMPLE_ARB_N], SRSRAN_RESAMPLE_ARB_M);
     }
 
-    if (idx == SRSRAN_RESAMPLE_ARB_N) {
-      *output = res1;
-    } else {
-      *output = (q->interpolate) ? (res1 + (res2 - res1) * frac) : res1;
-    }
+    *output = (q->interpolate) ? (res1 + (res2 - res1) * frac) : res1;
 
     output++;
     n_out++;

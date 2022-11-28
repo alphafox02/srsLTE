@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -65,7 +65,7 @@ public:
 
   bool get_uecrid_successful();
 
-  void process_pdu(uint8_t* pdu, uint32_t nof_bytes, srsran::pdu_queue::channel_t channel);
+  void process_pdu(uint8_t* pdu, uint32_t nof_bytes, srsran::pdu_queue::channel_t channel, int ul_nof_prbs);
   void mch_start_rx(uint32_t lcid);
 
 private:

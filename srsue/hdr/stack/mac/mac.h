@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -59,13 +59,12 @@ public:
   /* see mac_interface.h for comments */
   void     new_grant_ul(uint32_t cc_idx, mac_grant_ul_t grant, tb_action_ul_t* action);
   void     new_grant_dl(uint32_t cc_idx, mac_grant_dl_t grant, tb_action_dl_t* action);
-  void     new_mch_dl(const srsran_pdsch_grant_t& phy_grant, tb_action_dl_t* action);
   void     tb_decoded(uint32_t cc_idx, mac_grant_dl_t grant, bool ack[SRSRAN_MAX_CODEWORDS]);
   void     bch_decoded_ok(uint32_t cc_idx, uint8_t* payload, uint32_t len);
   uint16_t get_dl_sched_rnti(uint32_t tti);
   uint16_t get_ul_sched_rnti(uint32_t tti);
 
-  void mch_decoded(uint32_t len, bool crc);
+  void mch_decoded(uint32_t len, bool crc, uint8_t* payload);
   void process_mch_pdu(uint32_t len);
 
   void set_mbsfn_config(uint32_t nof_mbsfn_services);
@@ -93,8 +92,8 @@ public:
 
   void set_rach_ded_cfg(uint32_t preamble_index, uint32_t prach_mask);
 
-  void get_rntis(ue_rnti_t* rntis);
-  void set_ho_rnti(uint16_t crnti, uint16_t target_pci);
+  uint16_t get_crnti();
+  void     set_ho_rnti(uint16_t crnti, uint16_t target_pci);
 
   /*********** interface for stack ******************/
   void process_pdus();
@@ -109,8 +108,6 @@ public:
 private:
   void clear_rntis();
 
-  bool is_in_window(uint32_t tti, int* start, int* len);
-
   // Interaction with PHY
   phy_interface_mac_lte*                     phy_h = nullptr;
   rlc_interface_mac*                         rlc_h = nullptr;
@@ -119,13 +116,11 @@ private:
   srslog::basic_logger&                      logger;
   mac_interface_phy_lte::mac_phy_cfg_mbsfn_t phy_mbsfn_cfg = {};
 
-  // RNTI search window scheduling
-  int si_window_length = -1, si_window_start = -1;
-  int ra_window_length = -1, ra_window_start = -1;
-  int p_window_start = -1;
+  // Control scheduling for SI/RA/P RNTIs
+  rnti_window_safe si_window, ra_window, p_window;
 
   // UE-specific RNTIs
-  ue_rnti_t uernti;
+  ue_rnti uernti;
 
   /* Multiplexing/Demultiplexing Units */
   mux   mux_unit;
@@ -144,12 +139,12 @@ private:
 
   /* Buffers for PCH reception (not included in DL HARQ) */
   const static uint32_t  pch_payload_buffer_sz = 8 * 1024;
-  srsran_softbuffer_rx_t pch_softbuffer;
+  srsran_softbuffer_rx_t pch_softbuffer        = {};
   uint8_t                pch_payload_buffer[pch_payload_buffer_sz];
 
   /* Buffers for MCH reception (not included in DL HARQ) */
   const static uint32_t  mch_payload_buffer_sz = SRSRAN_MAX_BUFFER_SIZE_BYTES;
-  srsran_softbuffer_rx_t mch_softbuffer;
+  srsran_softbuffer_rx_t mch_softbuffer        = {};
   uint8_t                mch_payload_buffer[mch_payload_buffer_sz];
   srsran::mch_pdu        mch_msg;
 
@@ -162,12 +157,13 @@ private:
   srsran::task_multiqueue::queue_handle stack_task_dispatch_queue;
 
   // pointer to MAC PCAP object
-  srsran::mac_pcap* pcap              = nullptr;
-  bool              is_first_ul_grant = false;
+  srsran::mac_pcap* pcap = nullptr;
+  std::atomic<bool> is_first_ul_grant{false};
 
+  std::mutex    metrics_mutex                = {};
   mac_metrics_t metrics[SRSRAN_MAX_CARRIERS] = {};
 
-  bool initialized = false;
+  std::atomic<bool> initialized = {false};
 
   const uint8_t PCELL_CC_IDX = 0;
 };

@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -33,7 +33,7 @@ class rlc_pcap
 public:
   rlc_pcap() {}
   void enable(bool en);
-  void open(const char* filename, rlc_config_t config);
+  void open(const char* filename, const rlc_config_t& config);
   void close();
 
   void set_ue_id(uint16_t ue_id);

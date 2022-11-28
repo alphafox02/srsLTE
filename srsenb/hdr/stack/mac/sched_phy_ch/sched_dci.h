@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -22,7 +22,8 @@
 #ifndef SRSRAN_SCHED_DCI_H
 #define SRSRAN_SCHED_DCI_H
 
-#include "../sched_common.h"
+#include "../sched_lte_common.h"
+#include "srsenb/hdr/stack/mac/sched_phy_ch/sched_phy_resource.h"
 #include "srsran/adt/bounded_vector.h"
 
 namespace srsenb {
@@ -50,6 +51,19 @@ inline bool operator!=(const tbs_info& lhs, const tbs_info& rhs)
 tbs_info compute_mcs_and_tbs(uint32_t nof_prb,
                              uint32_t nof_re,
                              uint32_t cqi,
+                             uint32_t max_mcs,
+                             bool     is_ul,
+                             bool     ulqam64_enabled,
+                             bool     use_tbs_index_alt);
+
+/**
+ * Compute MCS, TBS based on maximum coderate, N_prb
+ * \remark See TS 36.213 - Table 7.1.7.1-1/1A
+ * @return resulting TBS (in bytes) and mcs. TBS=-1 if no valid solution was found.
+ */
+tbs_info compute_mcs_and_tbs(uint32_t nof_prb,
+                             uint32_t nof_re,
+                             float    max_coderate,
                              uint32_t max_mcs,
                              bool     is_ul,
                              bool     ulqam64_enabled,
@@ -99,6 +113,11 @@ bool generate_rar_dci(sched_interface::dl_sched_rar_t& rar,
                       const sched_cell_params_t&       cell_params,
                       uint32_t                         current_cfi);
 
+void generate_pdcch_order_dci(sched_interface::dl_sched_po_t& pdcch_order,
+                              tti_point                       tti_tx_dl,
+                              const sched_cell_params_t&      cell_params,
+                              uint32_t                        current_cfi);
+
 void log_broadcast_allocation(const sched_interface::dl_sched_bc_t& bc,
                               rbg_interval                          rbg_range,
                               const sched_cell_params_t&            cell_params);
@@ -108,6 +127,10 @@ void log_rar_allocation(const sched_interface::dl_sched_rar_t& rar,
                         const sched_cell_params_t&             cell_params);
 
 void log_rar_allocation(const sched_interface::dl_sched_rar_t& rar, rbg_interval rbg_range);
+
+void log_po_allocation(const sched_interface::dl_sched_po_t& pdcch_order,
+                       rbg_interval                          rbg_range,
+                       const sched_cell_params_t&            cell_params);
 
 } // namespace srsenb
 

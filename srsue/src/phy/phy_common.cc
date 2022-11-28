@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -54,17 +54,25 @@ void phy_common::init(phy_args_t*                  _args,
                       stack_interface_phy_lte*     _stack,
                       rsrp_insync_itf*             _chest_loop)
 {
-  radio_h        = _radio;
-  stack          = _stack;
-  args           = _args;
-  insync_itf     = _chest_loop;
-  sr_last_tx_tti = -1;
+  radio_h    = _radio;
+  stack      = _stack;
+  args       = _args;
+  insync_itf = _chest_loop;
+  sr.reset();
 
   // Instantiate UL channel emulator
   if (args->ul_channel_args.enable) {
     ul_channel = srsran::channel_ptr(
         new srsran::channel(args->ul_channel_args, args->nof_lte_carriers * args->nof_rx_ant, logger));
   }
+
+  // Init the CFR config struct with the CFR args
+  cfr_config.cfr_enable  = args->cfr_args.enable;
+  cfr_config.cfr_mode    = args->cfr_args.mode;
+  cfr_config.alpha       = args->cfr_args.strength;
+  cfr_config.manual_thr  = args->cfr_args.manual_thres;
+  cfr_config.max_papr_db = args->cfr_args.auto_target_papr;
+  cfr_config.ema_alpha   = args->cfr_args.ema_alpha;
 }
 
 void phy_common::set_ue_dl_cfg(srsran_ue_dl_cfg_t* ue_dl_cfg)
@@ -315,12 +323,14 @@ bool phy_common::is_any_ul_pending_ack()
 #define tti_pusch_hi(sf)                                                                                               \
   (sf->tti +                                                                                                           \
    (cell.frame_type == SRSRAN_FDD ? FDD_HARQ_DELAY_UL_MS                                                               \
-                                  : I_phich ? 7 : k_pusch[sf->tdd_config.sf_config][sf->tti % 10]) +                   \
+    : I_phich                     ? 7                                                                                  \
+                                  : k_pusch[sf->tdd_config.sf_config][sf->tti % 10]) +                                                     \
    (FDD_HARQ_DELAY_DL_MS - FDD_HARQ_DELAY_UL_MS))
 #define tti_pusch_gr(sf)                                                                                               \
   (sf->tti +                                                                                                           \
    (cell.frame_type == SRSRAN_FDD ? FDD_HARQ_DELAY_UL_MS                                                               \
-                                  : dci->ul_idx == 1 ? 7 : k_pusch[sf->tdd_config.sf_config][sf->tti % 10]) +          \
+    : dci->ul_idx == 1            ? 7                                                                                  \
+                                  : k_pusch[sf->tdd_config.sf_config][sf->tti % 10]) +                                            \
    (FDD_HARQ_DELAY_DL_MS - FDD_HARQ_DELAY_UL_MS))
 
 // SF->TTI is at which Format0 dci is received
@@ -540,48 +550,53 @@ bool phy_common::get_dl_pending_ack(srsran_ul_sf_cfg_t* sf, uint32_t cc_idx, srs
  * Each worker uses this function to indicate that all processing is done and data is ready for transmission or
  * there is no transmission at all (tx_enable). In that case, the end of burst message will be sent to the radio
  */
-void phy_common::worker_end(void*                   tx_sem_id,
-                            bool                    tx_enable,
-                            srsran::rf_buffer_t&    buffer,
-                            srsran::rf_timestamp_t& tx_time,
-                            bool                    is_nr)
+void phy_common::worker_end(const worker_context_t& w_ctx, const bool& tx_enable, srsran::rf_buffer_t& buffer)
 {
   // Wait for the green light to transmit in the current TTI
-  semaphore.wait(tx_sem_id);
+  semaphore.wait(w_ctx.worker_ptr);
 
-  // If this is for NR, save Tx buffers...
-  if (is_nr) {
-    nr_tx_buffer       = buffer;
-    nr_tx_buffer_ready = true;
+  // For each channel set or combine baseband
+  if (tx_enable) {
+    tx_buffer.set_combine(buffer);
+
+    // Flag transmit enabled
+    tx_enabled = true;
+  }
+
+  // If the current worker is not the last one, skip transmission
+  if (not w_ctx.last) {
+    if (tx_enable) {
+      reset_last_worker();
+    }
+
+    // Release semaphore and let next worker to get in
     semaphore.release();
+
+    // If this worker transmitted, hold the worker until last SF worker finishes
+    if (tx_enable) {
+      wait_last_worker();
+    }
+
     return;
   }
 
-  // ... otherwise, append NR base-band from saved buffer if available
-  if (nr_tx_buffer_ready) {
-    // Load NR carrier base-band
-    for (uint32_t i = 0; i < args->nof_nr_carriers * args->nof_rx_ant; i++) {
-      uint32_t channel_idx = args->nof_lte_carriers * args->nof_rx_ant + i;
-      buffer.set(channel_idx, nr_tx_buffer.get(i));
-    }
-
-    // Remove NR buffer flag
-    nr_tx_buffer_ready = false;
-
-    // Make sure it transmits in this TTI
-    tx_enable = true;
-  }
-
-  // Add Time Alignment
+  // Add current time alignment
+  srsran::rf_timestamp_t tx_time = w_ctx.tx_time; // get transmit time from the last worker
   tx_time.sub((double)ta.get_sec());
 
-  // For each radio, transmit
-  if (tx_enable) {
+  // Check if any worker had a transmission
+  if (tx_enabled) {
+    // Set number of samples to the latest transmit buffer
+    tx_buffer.set_nof_samples(buffer.get_nof_samples());
+
+    // Run uplink channel emulator
     if (ul_channel) {
-      ul_channel->run(buffer.to_cf_t(), buffer.to_cf_t(), buffer.get_nof_samples(), tx_time.get(0));
+      ul_channel->run(tx_buffer.to_cf_t(), tx_buffer.to_cf_t(), tx_buffer.get_nof_samples(), tx_time.get(0));
     }
 
-    radio_h->tx(buffer, tx_time);
+    // Actual baseband transmission
+    radio_h->tx(tx_buffer, tx_time);
+
   } else {
     if (radio_h->is_continuous_tx()) {
       if (is_pending_tx_end) {
@@ -603,6 +618,15 @@ void phy_common::worker_end(void*                   tx_sem_id,
     }
   }
 
+  // Notify that last SF worker finished. Releases all the threads waiting.
+  last_worker();
+
+  // Reset tx buffer to prevent next SF uses previous data
+  tx_enabled = false;
+  for (uint32_t ch = 0; ch < SRSRAN_MAX_CHANNELS; ch++) {
+    tx_buffer.set(ch, nullptr);
+  }
+
   // Allow next TTI to transmit
   semaphore.release();
 }
@@ -620,8 +644,31 @@ void phy_common::update_cfo_measurement(uint32_t cc_idx, float cfo_hz)
 {
   std::unique_lock<std::mutex> lock(meas_mutex);
 
-  // use SNR EMA coefficient for averaging
-  avg_cfo_hz[cc_idx] = SRSRAN_VEC_EMA(cfo_hz, avg_cfo_hz[cc_idx], args->snr_ema_coeff);
+  // Use SNR EMA coefficient for averaging
+  avg_cfo_hz[cc_idx] = SRSRAN_VEC_SAFE_EMA(cfo_hz, avg_cfo_hz[cc_idx], args->snr_ema_coeff);
+}
+
+void phy_common::reset_measurements(uint32_t cc_idx)
+{
+  // If the CC index exceeds the maximum number of carriers, reset them all
+  if (cc_idx >= SRSRAN_MAX_CARRIERS) {
+    for (uint32_t cc = 0; cc < SRSRAN_MAX_CARRIERS; cc++) {
+      reset_measurements(cc);
+    }
+  }
+
+  // Default all metrics to NAN to prevent providing invalid information on traces and other layers
+  std::unique_lock<std::mutex> lock(meas_mutex);
+  pathloss[cc_idx]       = NAN;
+  avg_rsrp[cc_idx]       = NAN;
+  avg_rsrp_dbm[cc_idx]   = NAN;
+  avg_rsrq_db[cc_idx]    = NAN;
+  avg_rssi_dbm[cc_idx]   = NAN;
+  avg_cfo_hz[cc_idx]     = NAN;
+  avg_sinr_db[cc_idx]    = NAN;
+  avg_snr_db[cc_idx]     = NAN;
+  avg_noise[cc_idx]      = NAN;
+  avg_rsrp_neigh[cc_idx] = NAN;
 }
 
 void phy_common::update_measurements(uint32_t                     cc_idx,
@@ -643,9 +690,9 @@ void phy_common::update_measurements(uint32_t                     cc_idx,
       return;
     }
 
-    // Only worker 0 reads the RSSI sensor
+    // Only worker 0 updates RX gain offset every 10 ms
     if (rssi_power_buffer) {
-      if (!rssi_read_cnt) {
+      if (!update_rxgain_cnt) {
         // Average RSSI over all symbols in antenna port 0 (make sure SF length is non-zero)
         float rssi_dbm = SRSRAN_SF_LEN_PRB(cell.nof_prb) > 0
                              ? (srsran_convert_power_to_dB(
@@ -653,35 +700,31 @@ void phy_common::update_measurements(uint32_t                     cc_idx,
                                 30)
                              : 0;
         if (std::isnormal(rssi_dbm)) {
-          avg_rssi_dbm[0] = SRSRAN_VEC_EMA(rssi_dbm, avg_rssi_dbm[0], args->snr_ema_coeff);
+          avg_rssi_dbm[0] = SRSRAN_VEC_SAFE_EMA(rssi_dbm, avg_rssi_dbm[0], args->snr_ema_coeff);
         }
 
         rx_gain_offset = get_radio()->get_rx_gain() + args->rx_gain_offset;
       }
-      rssi_read_cnt++;
-      if (rssi_read_cnt == 1000) {
-        rssi_read_cnt = 0;
+      update_rxgain_cnt++;
+      if (update_rxgain_cnt >= update_rxgain_period) {
+        update_rxgain_cnt = 0;
       }
     }
 
     // Average RSRQ over DEFAULT_MEAS_PERIOD_MS then sent to RRC
     float rsrq_db = chest_res.rsrq_db;
     if (std::isnormal(rsrq_db)) {
-      if (!(sf_cfg_dl.tti % pcell_report_period) || !std::isnormal(avg_rsrq_db[cc_idx])) {
-        avg_rsrq_db[cc_idx] = rsrq_db;
-      } else {
-        avg_rsrq_db[cc_idx] = SRSRAN_VEC_CMA(rsrq_db, avg_rsrq_db[cc_idx], sf_cfg_dl.tti % pcell_report_period);
+      // Reset average RSRQ measurement
+      if (sf_cfg_dl.tti % pcell_report_period == 0) {
+        avg_rsrq_db[cc_idx] = NAN;
       }
+      avg_rsrq_db[cc_idx] = SRSRAN_VEC_SAFE_CMA(rsrq_db, avg_rsrq_db[cc_idx], sf_cfg_dl.tti % pcell_report_period);
     }
 
     // Average RSRP taken from CRS
     float rsrp_lin = chest_res.rsrp;
     if (std::isnormal(rsrp_lin)) {
-      if (!std::isnormal(avg_rsrp[cc_idx])) {
-        avg_rsrp[cc_idx] = rsrp_lin;
-      } else {
-        avg_rsrp[cc_idx] = SRSRAN_VEC_EMA(rsrp_lin, avg_rsrp[cc_idx], snr_ema_coeff);
-      }
+      avg_rsrp[cc_idx] = SRSRAN_VEC_SAFE_EMA(rsrp_lin, avg_rsrp[cc_idx], snr_ema_coeff);
     }
 
     /* Correct absolute power measurements by RX gain offset */
@@ -689,11 +732,11 @@ void phy_common::update_measurements(uint32_t                     cc_idx,
 
     // Serving cell RSRP measurements are averaged over DEFAULT_MEAS_PERIOD_MS then sent to RRC
     if (std::isnormal(rsrp_dbm)) {
-      if (!(sf_cfg_dl.tti % pcell_report_period) || !std::isnormal(avg_rsrp_dbm[cc_idx])) {
-        avg_rsrp_dbm[cc_idx] = rsrp_dbm;
-      } else {
-        avg_rsrp_dbm[cc_idx] = SRSRAN_VEC_CMA(rsrp_dbm, avg_rsrp_dbm[cc_idx], sf_cfg_dl.tti % pcell_report_period);
+      // Reset average RSRP measurement
+      if (sf_cfg_dl.tti % pcell_report_period == 0) {
+        avg_rsrp_dbm[cc_idx] = NAN;
       }
+      avg_rsrp_dbm[cc_idx] = SRSRAN_VEC_SAFE_CMA(rsrp_dbm, avg_rsrp_dbm[cc_idx], sf_cfg_dl.tti % pcell_report_period);
     }
 
     // Compute PL
@@ -702,11 +745,7 @@ void phy_common::update_measurements(uint32_t                     cc_idx,
     // Average noise
     float cur_noise = chest_res.noise_estimate;
     if (std::isnormal(cur_noise)) {
-      if (!std::isnormal(avg_noise[cc_idx])) {
-        avg_noise[cc_idx] = cur_noise;
-      } else {
-        avg_noise[cc_idx] = SRSRAN_VEC_EMA(cur_noise, avg_noise[cc_idx], snr_ema_coeff);
-      }
+      avg_noise[cc_idx] = SRSRAN_VEC_SAFE_EMA(cur_noise, avg_noise[cc_idx], snr_ema_coeff);
     }
 
     // Calculate SINR using CRS from neighbours if are detected
@@ -723,20 +762,12 @@ void phy_common::update_measurements(uint32_t                     cc_idx,
 
     // Average sinr in the log domain
     if (std::isnormal(sinr_db)) {
-      if (!std::isnormal(avg_sinr_db[cc_idx])) {
-        avg_sinr_db[cc_idx] = sinr_db;
-      } else {
-        avg_sinr_db[cc_idx] = SRSRAN_VEC_EMA(sinr_db, avg_sinr_db[cc_idx], snr_ema_coeff);
-      }
+      avg_sinr_db[cc_idx] = SRSRAN_VEC_SAFE_EMA(sinr_db, avg_sinr_db[cc_idx], snr_ema_coeff);
     }
 
     // Average snr in the log domain
     if (std::isnormal(chest_res.snr_db)) {
-      if (!std::isnormal(avg_snr_db[cc_idx])) {
-        avg_snr_db[cc_idx] = chest_res.snr_db;
-      } else {
-        avg_snr_db[cc_idx] = SRSRAN_VEC_EMA(chest_res.snr_db, avg_snr_db[cc_idx], snr_ema_coeff);
-      }
+      avg_snr_db[cc_idx] = SRSRAN_VEC_SAFE_EMA(chest_res.snr_db, avg_snr_db[cc_idx], snr_ema_coeff);
     }
 
     // Store metrics
@@ -751,9 +782,9 @@ void phy_common::update_measurements(uint32_t                     cc_idx,
 
     set_ch_metrics(cc_idx, ch);
 
-    // Prepare measurements for serving cells
-    bool active = cell_state.is_configured(cc_idx);
-    if (active && ((sf_cfg_dl.tti % pcell_report_period) == pcell_report_period - 1)) {
+    // Prepare measurements for serving cells - skip if any measurement is invalid assuming pure zeros are not possible
+    if (std::isnormal(avg_rsrp_dbm[cc_idx]) and
+        std::isnormal(avg_cfo_hz[cc_idx] and ((sf_cfg_dl.tti % pcell_report_period) == pcell_report_period - 1))) {
       phy_meas_t meas = {};
       meas.rsrp       = avg_rsrp_dbm[cc_idx];
       meas.rsrq       = avg_rsrq_db[cc_idx];
@@ -875,21 +906,19 @@ void phy_common::reset()
 {
   reset_radio();
 
-  sr_enabled          = false;
-  cur_pathloss        = 0;
-  cur_pusch_power     = 0;
-  sr_last_tx_tti      = -1;
-  pcell_report_period = 20;
+  sr.reset();
+  {
+    std::unique_lock<std::mutex> lock(meas_mutex);
+    cur_pathloss    = 0;
+    cur_pusch_power = 0;
+  }
+  last_ri = 0;
 
-  ZERO_OBJECT(pathloss);
-  ZERO_OBJECT(avg_sinr_db);
-  ZERO_OBJECT(avg_snr_db);
-  ZERO_OBJECT(avg_rsrp);
-  ZERO_OBJECT(avg_rsrp_dbm);
-  ZERO_OBJECT(avg_rsrq_db);
+  // Reset all measurements
+  reset_measurements(SRSRAN_MAX_CARRIERS);
+
+  // Reset all SCell states
   cell_state.reset();
-
-  reset_neighbour_cells();
 
   // Note: Using memset to reset these members is forbidden because they are real objects, not plain arrays.
   {
@@ -913,13 +942,6 @@ void phy_common::reset()
     std::lock_guard<std::mutex> lock(pending_ul_grant_mutex);
     for (auto& i : pending_ul_grant) {
       i = {};
-    }
-  }
-
-  // Release mapping of secondary cells
-  if (args != nullptr && radio_h != nullptr) {
-    for (uint32_t i = 1; i < args->nof_lte_carriers; i++) {
-      radio_h->release_freq(i);
     }
   }
 }

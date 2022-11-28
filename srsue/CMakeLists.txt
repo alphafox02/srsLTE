@@ -1,5 +1,5 @@
 #
-# Copyright 2013-2021 Software Radio Systems Limited
+# Copyright 2013-2022 Software Radio Systems Limited
 #
 # This file is part of srsRAN
 #
@@ -43,7 +43,6 @@ link_directories(
 # Add subdirectories
 ########################################################################
 add_subdirectory(src)
-add_subdirectory(test)
 
 ########################################################################
 # Default configuration files

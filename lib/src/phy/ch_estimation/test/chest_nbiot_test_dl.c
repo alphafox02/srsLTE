@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -88,7 +88,7 @@ void parse_args(int argc, char** argv)
         snr_db = strtof(argv[optind], NULL);
         break;
       case 'v':
-        srsran_verbose++;
+        increase_srsran_verbose_level();
         break;
       default:
         usage(argv[0]);
@@ -154,7 +154,7 @@ int main(int argc, char** argv)
     for (int n_port = 0; n_port < cell.base.nof_ports; n_port++) {
       srsran_vec_cf_zero(input, num_re);
       for (int i = 0; i < num_re; i++) {
-        input[i] = 0.5 - rand() / RAND_MAX + I * (0.5 - rand() / RAND_MAX);
+        input[i] = 0.5 - rand() / (float)RAND_MAX + I * (0.5 - rand() / (float)RAND_MAX);
       }
 
       srsran_vec_cf_zero(ce, num_re);
@@ -178,7 +178,7 @@ int main(int argc, char** argv)
 
       if (have_channel) {
         // Add noise
-        float std_dev = srsran_convert_dB_to_amplitude(-(snr_db + 3.0f)) * 0.1f;
+        float std_dev = srsran_convert_dB_to_power(-(snr_db + 20.0f));
         srsran_ch_awgn_c(est.pilot_recv_signal, est.pilot_recv_signal, std_dev, SRSRAN_REFSIGNAL_MAX_NUM_SF(1));
       }
 

@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -33,6 +33,7 @@ typedef enum {
   RRC_STATE_WAIT_FOR_CON_REEST_COMPLETE,
   RRC_STATE_WAIT_FOR_SECURITY_MODE_COMPLETE,
   RRC_STATE_WAIT_FOR_UE_CAP_INFO,
+  RRC_STATE_WAIT_FOR_UE_CAP_INFO_ENDC, /* only entered for UEs with NSA support */
   RRC_STATE_WAIT_FOR_CON_RECONF_COMPLETE,
   RRC_STATE_REESTABLISHMENT_COMPLETE,
   RRC_STATE_REGISTERED,

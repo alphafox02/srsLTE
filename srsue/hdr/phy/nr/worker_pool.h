@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -36,22 +36,42 @@ private:
   srsran::thread_pool                      pool;
   std::vector<std::unique_ptr<sf_worker> > workers;
   state                                    phy_state;
-  std::unique_ptr<prach>                   prach_buffer = nullptr;
+  std::unique_ptr<prach>                   prach_buffer       = nullptr;
+  uint32_t                                 prach_nof_sf       = 0;
+  uint32_t                                 prach_sf_count     = 0;
+  cf_t*                                    prach_ptr          = nullptr;
+  float                                    prach_target_power = 0.0f;
+  uint32_t                                 sf_sz              = 0;
+  srsran::phy_cfg_nr_t                     cfg{};
+  std::vector<bool>                        pending_cfgs;
+  std::mutex                               cfg_mutex;
 
 public:
   sf_worker* operator[](std::size_t pos) { return workers.at(pos).get(); }
 
-  worker_pool(uint32_t max_workers);
-  bool       init(const phy_args_nr_t& args_, phy_common* common, stack_interface_phy_nr* stack_, int prio);
+  worker_pool(srslog::basic_logger& logger_, uint32_t max_workers);
+  bool       init(const phy_args_nr_t& args_, srsran::phy_common_interface& common, stack_interface_phy_nr* stack_);
   sf_worker* wait_worker(uint32_t tti);
   void       start_worker(sf_worker* w);
   void       stop();
-  void       send_prach(uint32_t prach_occasion, uint32_t preamble_index, int preamble_received_target_power);
-  int  set_ul_grant(std::array<uint8_t, SRSRAN_RAR_UL_GRANT_NBITS> array, uint16_t rnti, srsran_rnti_type_t rnti_type);
-  bool set_config(const srsran::phy_cfg_nr_t& cfg);
+  void       send_prach(const uint32_t prach_occasion,
+                        const int      preamble_index,
+                        const float    preamble_received_target_power,
+                        const float    ta_base_sec = 0.0f);
+  int        set_rar_grant(uint32_t                                       rx_tti,
+                           std::array<uint8_t, SRSRAN_RAR_UL_GRANT_NBITS> array,
+                           uint16_t                                       rnti,
+                           srsran_rnti_type_t                             rnti_type);
+  bool       set_config(const srsran::phy_cfg_nr_t& cfg);
   bool       has_valid_sr_resource(uint32_t sr_id);
   void       clear_pending_grants();
   void       get_metrics(phy_metrics_t& m);
+
+  /**
+   * @brief Sets external CFO to compensate UL signal frequency offset
+   * @param ext_cfo_hz External CFO in Hz
+   */
+  void set_ul_ext_cfo(float ext_cfo_hz) { phy_state.set_ul_ext_cfo(ext_cfo_hz); }
 };
 
 } // namespace nr

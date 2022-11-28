@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -83,9 +83,14 @@ public:
   std::string            get_ip() const { return net_utils::get_ip(addr); }
   net_utils::socket_type get_family() const { return net_utils::get_addr_family(sockfd); }
 
+  bool open_socket(net_utils::addr_family ip, net_utils::socket_type socket_type, net_utils::protocol_type protocol);
   bool bind_addr(const char* bind_addr_str, int port);
   bool connect_to(const char* dest_addr_str, int dest_port, sockaddr_in* dest_sockaddr = nullptr);
-  bool open_socket(net_utils::addr_family ip, net_utils::socket_type socket_type, net_utils::protocol_type protocol);
+  bool start_listen();
+  bool reuse_addr();
+  bool sctp_subscribe_to_events();
+  bool sctp_set_rto_opts(int rto_max);
+  bool sctp_set_init_msg_opts(int max_init_attempts, int max_init_timeo);
   int  get_socket() const { return sockfd; };
 
 protected:
@@ -95,8 +100,7 @@ protected:
 
 namespace net_utils {
 
-bool sctp_init_client(unique_socket* socket, net_utils::socket_type socktype, const char* bind_addr_str);
-bool sctp_init_server(unique_socket* socket, net_utils::socket_type socktype, const char* bind_addr_str, int port);
+bool sctp_init_socket(unique_socket* socket, net_utils::socket_type socktype, const char* bind_addr_str, int bind_port);
 
 } // namespace net_utils
 
@@ -163,7 +167,7 @@ private:
   // state
   std::mutex                     socket_mutex;
   std::map<int, recv_callback_t> active_sockets;
-  bool                           running   = false;
+  std::atomic<bool>              running   = {false};
   int                            pipefd[2] = {-1, -1};
   std::vector<int>               rem_fd_tmp_list;
   std::condition_variable        rem_cvar;
@@ -195,6 +199,12 @@ make_sctp_sdu_handler(srslog::basic_logger& logger, srsran::task_queue_handle& q
  */
 socket_manager_itf::recv_callback_t
 make_sdu_handler(srslog::basic_logger& logger, srsran::task_queue_handle& queue, recvfrom_callback_t rx_callback);
+
+inline socket_manager& get_rx_io_manager()
+{
+  static socket_manager io;
+  return io;
+}
 
 } // namespace srsran
 

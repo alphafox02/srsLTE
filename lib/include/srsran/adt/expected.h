@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -22,7 +22,7 @@
 #ifndef SRSRAN_EXPECTED_H
 #define SRSRAN_EXPECTED_H
 
-#include "srsran/common/srsran_assert.h"
+#include "srsran/support/srsran_assert.h"
 #include <memory>
 #include <system_error>
 

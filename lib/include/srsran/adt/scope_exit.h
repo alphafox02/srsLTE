@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -69,7 +69,7 @@ detail::scope_exit<typename std::decay<Callable>::type> make_scope_exit(Callable
   return detail::scope_exit<typename std::decay<Callable>::type>{std::forward<Callable>(callable)};
 }
 
-#define DEFER(FUNC) auto on_exit_call = make_scope_exit([&]() { FUNC })
+#define DEFER(FUNC) auto on_exit_call##__LINE__ = srsran::make_scope_exit([&]() { FUNC })
 
 } // namespace srsran
 

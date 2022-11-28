@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -36,26 +36,26 @@ struct info_metrics_t {
 
 #define PHY_METRICS_SET(PARAM)                                                                                         \
   do {                                                                                                                 \
-    PARAM = PARAM + (other.PARAM - PARAM) / count;                                                                     \
+    PARAM = SRSRAN_VEC_SAFE_CMA(other.PARAM, PARAM, count);                                                            \
   } while (false)
 
 struct sync_metrics_t {
   typedef std::array<sync_metrics_t, SRSRAN_MAX_CARRIERS> array_t;
 
-  float ta_us;
-  float distance_km;
-  float speed_kmph;
-  float cfo;
-  float sfo;
+  float ta_us       = 0.0;
+  float distance_km = 0.0;
+  float speed_kmph  = 0.0;
+  float cfo         = 0.0;
+  float sfo         = 0.0;
 
   void set(const sync_metrics_t& other)
   {
-    count++;
     ta_us       = other.ta_us;
     distance_km = other.distance_km;
     speed_kmph  = other.speed_kmph;
     PHY_METRICS_SET(cfo);
     PHY_METRICS_SET(sfo);
+    count++;
   }
 
   void reset()
@@ -75,20 +75,23 @@ private:
 struct ch_metrics_t {
   typedef std::array<ch_metrics_t, SRSRAN_MAX_CARRIERS> array_t;
 
-  float n;
-  float sinr;
-  float rsrp;
-  float rsrq;
-  float rssi;
-  float ri;
-  float pathloss;
-  float sync_err;
+  float n        = 0.0;
+  float sinr     = 0.0;
+  float rsrp     = 0.0;
+  float rsrq     = 0.0;
+  float rssi     = 0.0;
+  float ri       = 0.0;
+  float pathloss = 0.0;
+  float sync_err = 0.0;
 
   void set(const ch_metrics_t& other)
   {
     count++;
     PHY_METRICS_SET(n);
-    PHY_METRICS_SET(sinr);
+    // We exclude inf and nan from the average SINR
+    if (!std::isnan(other.sinr) || !std::isinf(other.sinr)) {
+      PHY_METRICS_SET(sinr);
+    }
     PHY_METRICS_SET(rsrp);
     PHY_METRICS_SET(rsrq);
     PHY_METRICS_SET(rssi);
@@ -117,9 +120,9 @@ private:
 struct dl_metrics_t {
   typedef std::array<dl_metrics_t, SRSRAN_MAX_CARRIERS> array_t;
 
-  float fec_iters;
-  float mcs;
-  float evm;
+  float fec_iters = 0.0;
+  float mcs       = 0.0;
+  float evm       = 0.0;
 
   void set(const dl_metrics_t& other)
   {

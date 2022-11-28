@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -118,75 +118,7 @@ int open_socket(net_utils::addr_family ip_type, net_utils::socket_type socket_ty
     perror("Could not create socket\n");
     return -1;
   }
-
-  if (protocol == protocol_type::SCTP) {
-    // Sets the data_io_event to be able to use sendrecv_info
-    // Subscribes to the SCTP_SHUTDOWN event, to handle graceful shutdown
-    // Also subscribes to SCTP_PEER_ADDR_CHANGE, to handle ungraceful shutdown of the link.
-    struct sctp_event_subscribe evnts = {};
-    evnts.sctp_data_io_event          = 1;
-    evnts.sctp_shutdown_event         = 1;
-    evnts.sctp_address_event          = 1;
-    if (setsockopt(fd, IPPROTO_SCTP, SCTP_EVENTS, &evnts, sizeof(evnts)) != 0) {
-      srslog::fetch_basic_logger(LOGSERVICE).error("Failed to subscribe to SCTP_SHUTDOWN event: %s", strerror(errno));
-      perror("Could not register socket to SCTP events\n");
-      close(fd);
-      return -1;
-    }
-
-    /*
-     * Modify SCTP default parameters for quicker detection of broken links.
-     * This includes changes to the SCTP_INITMSG parameters (to control the timeout of the connect() syscall)
-     * And changes to the maximum re-transmission timeout (rto_max), for quicker detection of broken links.
-     */
-    // Set RTO_MAX to quickly detect broken links.
-    sctp_rtoinfo rto_opts;
-    socklen_t    rto_sz    = sizeof(sctp_rtoinfo);
-    rto_opts.srto_assoc_id = 0;
-    if (getsockopt(fd, SOL_SCTP, SCTP_RTOINFO, &rto_opts, &rto_sz) < 0) {
-      printf("Error getting RTO_INFO sockopts\n");
-      close(fd);
-      return -1;
-    }
-
-    rto_opts.srto_max = 6000; // 6 seconds
-
-    srslog::fetch_basic_logger(LOGSERVICE)
-        .debug(
-            "Setting RTO_INFO options on SCTP socket. Association %d, Initial RTO %d, Minimum RTO %d, Maximum RTO %d",
-            rto_opts.srto_assoc_id,
-            rto_opts.srto_initial,
-            rto_opts.srto_min,
-            rto_opts.srto_max);
-
-    if (setsockopt(fd, SOL_SCTP, SCTP_RTOINFO, &rto_opts, rto_sz) < 0) {
-      perror("Error setting RTO_INFO sockopts\n");
-      close(fd);
-      return -1;
-    }
-
-    // Set SCTP INITMSG options to reduce blocking timeout of connect()
-    sctp_initmsg init_opts;
-    socklen_t    init_sz = sizeof(sctp_initmsg);
-    if (getsockopt(fd, SOL_SCTP, SCTP_INITMSG, &init_opts, &init_sz) < 0) {
-      printf("Error getting sockopts\n");
-      close(fd);
-      return -1;
-    }
-
-    init_opts.sinit_max_attempts   = 3;
-    init_opts.sinit_max_init_timeo = 5000; // 5 seconds
-
-    srslog::fetch_basic_logger(LOGSERVICE)
-        .debug("Setting SCTP_INITMSG options on SCTP socket. Max attempts %d, Max init attempts timeout %d",
-               init_opts.sinit_max_attempts,
-               init_opts.sinit_max_init_timeo);
-    if (setsockopt(fd, SOL_SCTP, SCTP_INITMSG, &init_opts, init_sz) < 0) {
-      perror("Error setting SCTP_INITMSG sockopts\n");
-      close(fd);
-      return -1;
-    }
-  }
+  srslog::fetch_basic_logger(LOGSERVICE).debug("Opened %s socket=%d", net_utils::protocol_to_string(protocol), fd);
 
   return fd;
 }
@@ -200,10 +132,17 @@ bool bind_addr(int fd, const sockaddr_in& addr_in)
 
   if (bind(fd, (struct sockaddr*)&addr_in, sizeof(addr_in)) != 0) {
     srslog::fetch_basic_logger(LOGSERVICE)
-        .error("Failed to bind on address %s: %s errno %d", get_ip(addr_in).c_str(), strerror(errno), errno);
+        .error("Failed to bind on address %s:%d. Socket=%d, strerror=%s, errno=%d",
+               get_ip(addr_in).c_str(),
+               get_port(addr_in),
+               fd,
+               strerror(errno),
+               errno);
     perror("bind()");
     return false;
   }
+  srslog::fetch_basic_logger(LOGSERVICE)
+      .debug("Successfully bound to address %s:%d", get_ip(addr_in).c_str(), get_port(addr_in));
   return true;
 }
 
@@ -215,7 +154,11 @@ bool bind_addr(int fd, const char* bind_addr_str, int port, sockaddr_in* addr_re
         .error("Failed to convert IP address (%s) to sockaddr_in struct", bind_addr_str);
     return false;
   }
-  bind_addr(fd, addr_tmp);
+
+  if (not bind_addr(fd, addr_tmp)) {
+    return false;
+  }
+
   if (addr_result != nullptr) {
     *addr_result = addr_tmp;
   }
@@ -245,6 +188,123 @@ bool connect_to(int fd, const char* dest_addr_str, int dest_port, sockaddr_in* d
   return true;
 }
 
+bool start_listen(int fd)
+{
+  if (fd < 0) {
+    srslog::fetch_basic_logger(LOGSERVICE).error("Tried to listen for connections with an invalid socket.");
+    return false;
+  }
+
+  // Listen for connections
+  if (listen(fd, SOMAXCONN) != 0) {
+    srslog::fetch_basic_logger(LOGSERVICE).error("Failed to listen to incoming SCTP connections");
+    perror("listen()");
+    return false;
+  }
+  return true;
+}
+
+bool reuse_addr(int fd)
+{
+  if (fd < 0) {
+    srslog::fetch_basic_logger(LOGSERVICE).error("Trying reuse_addr a closed socket. Socket=%d", fd);
+    return false;
+  }
+
+  int enable = 1;
+  if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0) {
+    srslog::fetch_basic_logger(LOGSERVICE).error("Failed to set SO_REUSEADDR. Socket=%d", fd);
+    return false;
+  }
+  srslog::fetch_basic_logger(LOGSERVICE).debug("Successfully set SO_REUSEADDR. Socket=%d", fd);
+  return true;
+}
+
+bool sctp_subscribe_to_events(int fd)
+{
+  if (fd < 0) {
+    srslog::fetch_basic_logger(LOGSERVICE).error("Trying subscribe to SCTP events on a closed socket. Socket=%d", fd);
+    return false;
+  }
+
+  // Sets the data_io_event to be able to use sendrecv_info
+  // Subscribes to the SCTP_SHUTDOWN event, to handle graceful shutdown
+  // Also subscribes to SCTP_PEER_ADDR_CHANGE, to handle ungraceful shutdown of the link.
+  struct sctp_event_subscribe evnts = {};
+  evnts.sctp_data_io_event          = 1;
+  evnts.sctp_shutdown_event         = 1;
+  evnts.sctp_address_event          = 1;
+  if (setsockopt(fd, IPPROTO_SCTP, SCTP_EVENTS, &evnts, sizeof(evnts)) != 0) {
+    srslog::fetch_basic_logger(LOGSERVICE).error("Failed to subscribe to SCTP_SHUTDOWN event: %s", strerror(errno));
+    perror("Could not register socket to SCTP events\n");
+    close(fd);
+    return false;
+  }
+  return true;
+}
+
+/*
+ * Modify SCTP default parameters for quicker detection of broken links.
+ * Changes to the maximum re-transmission timeout (rto_max).
+ */
+bool sctp_set_rto_opts(int fd, int rto_max)
+{
+  // Set RTO_MAX to quickly detect broken links.
+  sctp_rtoinfo rto_opts;
+  socklen_t    rto_sz    = sizeof(sctp_rtoinfo);
+  rto_opts.srto_assoc_id = 0;
+  if (getsockopt(fd, SOL_SCTP, SCTP_RTOINFO, &rto_opts, &rto_sz) < 0) {
+    printf("Error getting RTO_INFO sockopts\n");
+    close(fd);
+    return false;
+  }
+
+  rto_opts.srto_max = rto_max;
+
+  srslog::fetch_basic_logger(LOGSERVICE)
+      .debug("Setting RTO_INFO options on SCTP socket. Association %d, Initial RTO %d, Minimum RTO %d, Maximum RTO %d",
+             rto_opts.srto_assoc_id,
+             rto_opts.srto_initial,
+             rto_opts.srto_min,
+             rto_opts.srto_max);
+
+  if (setsockopt(fd, SOL_SCTP, SCTP_RTOINFO, &rto_opts, rto_sz) < 0) {
+    perror("Error setting RTO_INFO sockopts\n");
+    close(fd);
+    return false;
+  }
+  return true;
+}
+
+/*
+ * Modify SCTP default parameters for quicker detection of broken links.
+ * Changes to the SCTP_INITMSG parameters (to control the timeout of the connect() syscall)
+ */
+bool sctp_set_init_msg_opts(int fd, int init_max_attempts, int max_init_timeo)
+{
+  // Set SCTP INITMSG options to reduce blocking timeout of connect()
+  sctp_initmsg init_opts;
+  socklen_t    init_sz = sizeof(sctp_initmsg);
+  if (getsockopt(fd, SOL_SCTP, SCTP_INITMSG, &init_opts, &init_sz) < 0) {
+    printf("Error getting sockopts\n");
+    close(fd);
+    return false;
+  }
+
+  init_opts.sinit_max_attempts   = init_max_attempts;
+  init_opts.sinit_max_init_timeo = max_init_timeo;
+
+  srslog::fetch_basic_logger(LOGSERVICE)
+      .debug("Setting SCTP_INITMSG options on SCTP socket. Max attempts %d, Max init attempts timeout %d",
+             init_opts.sinit_max_attempts,
+             init_opts.sinit_max_init_timeo);
+  if (setsockopt(fd, SOL_SCTP, SCTP_INITMSG, &init_opts, init_sz) < 0) {
+    perror("Error setting SCTP_INITMSG sockopts\n");
+    close(fd);
+    return false;
+  }
+  return true;
+}
 } // namespace net_utils
 
 /********************************************
@@ -269,12 +329,30 @@ unique_socket& unique_socket::operator=(unique_socket&& other) noexcept
   return *this;
 }
 
+bool unique_socket::open_socket(net_utils::addr_family   ip_type,
+                                net_utils::socket_type   socket_type,
+                                net_utils::protocol_type protocol)
+{
+  if (is_open()) {
+    srslog::fetch_basic_logger(LOGSERVICE).error("Socket is already open.");
+    return false;
+  }
+  sockfd = net_utils::open_socket(ip_type, socket_type, protocol);
+  return is_open();
+}
+
 void unique_socket::close()
 {
   if (sockfd >= 0) {
-    ::close(sockfd);
+    if (::close(sockfd) == -1) {
+      srslog::fetch_basic_logger(LOGSERVICE).error("Socket=%d could not be closed.", sockfd);
+    } else {
+      srslog::fetch_basic_logger(LOGSERVICE).debug("Socket=%d was closed.", sockfd);
+    }
     sockfd = -1;
     addr   = {};
+  } else {
+    srslog::fetch_basic_logger(LOGSERVICE).debug("Socket=%d could not be closed.", sockfd);
   }
 }
 
@@ -288,55 +366,30 @@ bool unique_socket::connect_to(const char* dest_addr_str, int dest_port, sockadd
   return net_utils::connect_to(sockfd, dest_addr_str, dest_port, dest_sockaddr);
 }
 
-bool unique_socket::open_socket(net_utils::addr_family   ip_type,
-                                net_utils::socket_type   socket_type,
-                                net_utils::protocol_type protocol)
+bool unique_socket::start_listen()
 {
-  if (is_open()) {
-    srslog::fetch_basic_logger(LOGSERVICE).error("Socket is already open.");
-    return false;
-  }
-  sockfd = net_utils::open_socket(ip_type, socket_type, protocol);
-  return is_open();
+  return net_utils::start_listen(sockfd);
 }
 
-/***********************************************************************
- *                          SCTP socket
- **********************************************************************/
-
-namespace net_utils {
-
-bool sctp_init_socket(unique_socket* socket, net_utils::socket_type socktype, const char* bind_addr_str, int port)
+bool unique_socket::reuse_addr()
 {
-  if (not socket->open_socket(net_utils::addr_family::ipv4, socktype, net_utils::protocol_type::SCTP)) {
-    return false;
-  }
-  if (not socket->bind_addr(bind_addr_str, port)) {
-    socket->close();
-    return false;
-  }
-  return true;
+  return net_utils::reuse_addr(sockfd);
 }
 
-bool sctp_init_client(unique_socket* socket, net_utils::socket_type socktype, const char* bind_addr_str)
+bool unique_socket::sctp_subscribe_to_events()
 {
-  return sctp_init_socket(socket, socktype, bind_addr_str, 0);
+  return net_utils::sctp_subscribe_to_events(sockfd);
 }
 
-bool sctp_init_server(unique_socket* socket, net_utils::socket_type socktype, const char* bind_addr_str, int port)
+bool unique_socket::sctp_set_rto_opts(int rto_max)
 {
-  if (not sctp_init_socket(socket, socktype, bind_addr_str, port)) {
-    return false;
-  }
-  // Listen for connections
-  if (listen(socket->fd(), SOMAXCONN) != 0) {
-    srslog::fetch_basic_logger(LOGSERVICE).error("Failed to listen to incoming SCTP connections");
-    return false;
-  }
-  return true;
+  return net_utils::sctp_set_rto_opts(sockfd, rto_max);
 }
 
-} // namespace net_utils
+bool unique_socket::sctp_set_init_msg_opts(int max_init_attempts, int max_init_timeo)
+{
+  return net_utils::sctp_set_init_msg_opts(sockfd, max_init_attempts, max_init_timeo);
+}
 
 /***************************************************************
  *                 Rx Multisocket Handler
@@ -468,7 +521,7 @@ void socket_manager::run_thread()
   FD_SET(pipefd[0], &total_fd_set);
   max_fd = std::max(pipefd[0], max_fd);
 
-  while (running) {
+  while (running.load(std::memory_order_relaxed)) {
     memcpy(&read_fd_set, &total_fd_set, sizeof(total_fd_set));
     int n = select(max_fd + 1, &read_fd_set, nullptr, nullptr, nullptr);
 

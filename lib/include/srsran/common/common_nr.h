@@ -1,6 +1,6 @@
 
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -64,7 +64,7 @@ enum class nr_drb {
   invalid
 };
 const uint32_t MAX_NR_DRB_ID      = 29;
-const uint32_t MAX_NR_NOF_BEARERS = MAX_NR_DRB_ID + MAX_NR_SRB_ID;
+const uint32_t MAX_NR_NOF_BEARERS = MAX_NR_DRB_ID + MAX_NR_SRB_ID; // 32
 
 constexpr bool is_nr_lcid(uint32_t lcid)
 {

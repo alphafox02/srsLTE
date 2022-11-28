@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -59,19 +59,50 @@ __attribute__((constructor)) static void srsran_dft_load()
 #ifdef FFTW_WISDOM_FILE
   char full_path[256];
   get_fftw_wisdom_file(full_path, sizeof(full_path));
-  fftwf_import_wisdom_from_filename(full_path);
+  // lockf needs a file descriptor open for writing, so this must be r+
+  FILE* fd = fopen(full_path, "r+");
+  if (fd == NULL) {
+    return;
+  }
+  if (lockf(fileno(fd), F_LOCK, 0) == -1) {
+    perror("lockf()");
+    fclose(fd);
+    return;
+  }
+  fftwf_import_wisdom_from_file(fd);
+  if (lockf(fileno(fd), F_ULOCK, 0) == -1) {
+    perror("u-lockf()");
+    fclose(fd);
+    return;
+  }
+  fclose(fd);
 #else
   printf("Warning: FFTW Wisdom file not defined\n");
 #endif
 }
 
 // This function is called in the ending of any executable where it is linked
-__attribute__((destructor)) static void srsran_dft_exit()
+__attribute__((destructor)) void srsran_dft_exit()
 {
 #ifdef FFTW_WISDOM_FILE
   char full_path[256];
   get_fftw_wisdom_file(full_path, sizeof(full_path));
-  fftwf_export_wisdom_to_filename(full_path);
+  FILE* fd = fopen(full_path, "w");
+  if (fd == NULL) {
+    return;
+  }
+  if (lockf(fileno(fd), F_LOCK, 0) == -1) {
+    perror("lockf()");
+    fclose(fd);
+    return;
+  }
+  fftwf_export_wisdom_to_file(fd);
+  if (lockf(fileno(fd), F_ULOCK, 0) == -1) {
+    perror("u-lockf()");
+    fclose(fd);
+    return;
+  }
+  fclose(fd);
 #endif
   fftwf_cleanup();
 }
@@ -186,10 +217,11 @@ int srsran_dft_plan_guru_c(srsran_dft_plan_t* plan,
   pthread_mutex_lock(&fft_mutex);
 
   plan->p = fftwf_plan_guru_dft(1, &iodim, 1, &howmany_dims, in_buffer, out_buffer, sign, FFTW_TYPE);
+  pthread_mutex_unlock(&fft_mutex);
+
   if (!plan->p) {
     return -1;
   }
-  pthread_mutex_unlock(&fft_mutex);
 
   plan->size      = dft_points;
   plan->init_size = plan->size;

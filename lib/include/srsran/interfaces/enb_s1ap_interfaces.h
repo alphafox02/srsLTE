@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -37,7 +37,16 @@ struct s1ap_args_t {
   std::string gtp_bind_addr;
   std::string gtp_advertise_addr;
   std::string s1c_bind_addr;
+  uint16_t    s1c_bind_port;
   std::string enb_name;
+  uint32_t    ts1_reloc_prep_timeout;
+  uint32_t    ts1_reloc_overall_timeout;
+  int32_t     max_s1_setup_retries;
+  uint32_t    s1_connect_timer;
+  bool        sctp_reuse_addr;
+  int32_t     sctp_rto_max;
+  int32_t     sctp_init_max_attempts;
+  int32_t     sctp_max_init_timeo;
 };
 
 // S1AP interface for RRC
@@ -68,8 +77,9 @@ public:
   virtual bool user_release(uint16_t rnti, asn1::s1ap::cause_radio_network_e cause_radio) = 0;
   virtual bool is_mme_connected()                                                         = 0;
 
-  /// TS 36.413, 8.3.1 - Initial Context Setup
-  virtual void ue_ctxt_setup_complete(uint16_t rnti) = 0;
+  // Notify S1AP of RRC reconfiguration successful finish.
+  // Many S1AP procedures use this notification to indicate successful end (e.g InitialContextSetupRequest)
+  virtual void notify_rrc_reconf_complete(uint16_t rnti) = 0;
 
   /**
    * Command the s1ap to transmit a HandoverRequired message to MME.
@@ -84,6 +94,7 @@ public:
    */
   virtual bool send_ho_required(uint16_t                     rnti,
                                 uint32_t                     target_eci,
+                                uint16_t                     target_tac,
                                 srsran::plmn_id_t            target_plmn,
                                 srsran::span<uint32_t>       fwd_erabs,
                                 srsran::unique_byte_buffer_t rrc_container,

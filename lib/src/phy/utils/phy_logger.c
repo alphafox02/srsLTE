@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -38,7 +38,7 @@ void srsran_phy_log_register_handler(void* ctx, phy_log_handler_t handler)
 {
   phy_log_handler = handler;
   callback_ctx    = ctx;
-  handler_registered++;
+  set_handler_enabled(true);
 }
 
 void srsran_phy_log_print(phy_logger_level_t log_level, const char* format, ...)

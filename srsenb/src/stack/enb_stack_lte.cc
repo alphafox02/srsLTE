@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -22,9 +22,11 @@
 #include "srsenb/hdr/stack/enb_stack_lte.h"
 #include "srsenb/hdr/common/rnti_pool.h"
 #include "srsenb/hdr/enb.h"
+#include "srsenb/hdr/stack/upper/gtpu_pdcp_adapter.h"
 #include "srsran/interfaces/enb_metrics_interface.h"
+#include "srsran/interfaces/enb_x2_interfaces.h"
+#include "srsran/rlc/bearer_mem_pool.h"
 #include "srsran/srslog/event_trace.h"
-#include "srsran/upper/bearer_mem_pool.h"
 
 using namespace srsran;
 
@@ -43,16 +45,15 @@ enb_stack_lte::enb_stack_lte(srslog::sink& log_sink) :
   pdcp(&task_sched, pdcp_logger),
   mac(&task_sched, mac_logger),
   rlc(rlc_logger),
-  gtpu(&task_sched, gtpu_logger, &rx_sockets),
-  s1ap(&task_sched, s1ap_logger, &rx_sockets),
-  rrc(&task_sched),
+  gtpu(&task_sched, gtpu_logger, &get_rx_io_manager()),
+  s1ap(&task_sched, s1ap_logger, &get_rx_io_manager()),
+  rrc(&task_sched, bearers),
   mac_pcap(),
   pending_stack_metrics(64)
 {
   get_background_workers().set_nof_workers(2);
-  enb_task_queue  = task_sched.make_task_queue();
-  mme_task_queue  = task_sched.make_task_queue();
-  gtpu_task_queue = task_sched.make_task_queue();
+  enb_task_queue     = task_sched.make_task_queue();
+  metrics_task_queue = task_sched.make_task_queue();
   // sync_queue is added in init()
 }
 
@@ -66,20 +67,14 @@ std::string enb_stack_lte::get_type()
   return "lte";
 }
 
-int enb_stack_lte::init(const stack_args_t& args_, const rrc_cfg_t& rrc_cfg_, phy_interface_stack_lte* phy_)
-{
-  phy = phy_;
-  if (init(args_, rrc_cfg_)) {
-    return SRSRAN_ERROR;
-  }
-
-  return SRSRAN_SUCCESS;
-}
-
-int enb_stack_lte::init(const stack_args_t& args_, const rrc_cfg_t& rrc_cfg_)
+int enb_stack_lte::init(const stack_args_t&      args_,
+                        const rrc_cfg_t&         rrc_cfg_,
+                        phy_interface_stack_lte* phy_,
+                        x2_interface*            x2_)
 {
   args    = args_;
   rrc_cfg = rrc_cfg_;
+  phy     = phy_;
 
   // Init RNTI and bearer memory pools
   reserve_rnti_memblocks(args.mac.nof_prealloc_ues);
@@ -88,9 +83,6 @@ int enb_stack_lte::init(const stack_args_t& args_, const rrc_cfg_t& rrc_cfg_)
 
   // setup logging for each layer
   mac_logger.set_level(srslog::str_to_basic_level(args.log.mac_level));
-  mac_logger.set_hex_dump_max_size(args.log.mac_hex_limit);
-
-  // Init logs
   rlc_logger.set_level(srslog::str_to_basic_level(args.log.rlc_level));
   pdcp_logger.set_level(srslog::str_to_basic_level(args.log.pdcp_level));
   rrc_logger.set_level(srslog::str_to_basic_level(args.log.rrc_level));
@@ -98,6 +90,7 @@ int enb_stack_lte::init(const stack_args_t& args_, const rrc_cfg_t& rrc_cfg_)
   s1ap_logger.set_level(srslog::str_to_basic_level(args.log.s1ap_level));
   stack_logger.set_level(srslog::str_to_basic_level(args.log.stack_level));
 
+  mac_logger.set_hex_dump_max_size(args.log.mac_hex_limit);
   rlc_logger.set_hex_dump_max_size(args.log.rlc_hex_limit);
   pdcp_logger.set_hex_dump_max_size(args.log.pdcp_hex_limit);
   rrc_logger.set_hex_dump_max_size(args.log.rrc_hex_limit);
@@ -107,7 +100,7 @@ int enb_stack_lte::init(const stack_args_t& args_, const rrc_cfg_t& rrc_cfg_)
 
   // Set up pcap and trace
   if (args.mac_pcap.enable) {
-    mac_pcap.open(args.mac_pcap.filename.c_str());
+    mac_pcap.open(args.mac_pcap.filename);
     mac.start_pcap(&mac_pcap);
   }
 
@@ -127,14 +120,22 @@ int enb_stack_lte::init(const stack_args_t& args_, const rrc_cfg_t& rrc_cfg_)
   // add sync queue
   sync_task_queue = task_sched.make_task_queue(args.sync_queue_size);
 
-  // Init all layers
+  // add x2 queue
+  if (x2_ != nullptr) {
+    x2_task_queue = task_sched.make_task_queue();
+  }
+
+  // setup bearer managers
+  gtpu_adapter.reset(new gtpu_pdcp_adapter(stack_logger, &pdcp, x2_, &gtpu, bearers));
+
+  // Init all LTE layers
   if (!mac.init(args.mac, rrc_cfg.cell_list, phy, &rlc, &rrc)) {
     stack_logger.error("Couldn't initialize MAC");
     return SRSRAN_ERROR;
   }
   rlc.init(&pdcp, &rrc, &mac, task_sched.get_timer_handler());
-  pdcp.init(&rlc, &rrc, &gtpu);
-  if (rrc.init(rrc_cfg, phy, &mac, &rlc, &pdcp, &s1ap, &gtpu) != SRSRAN_SUCCESS) {
+  pdcp.init(&rlc, &rrc, gtpu_adapter.get());
+  if (rrc.init(rrc_cfg, phy, &mac, &rlc, &pdcp, &s1ap, &gtpu, x2_) != SRSRAN_SUCCESS) {
     stack_logger.error("Couldn't initialize RRC");
     return SRSRAN_ERROR;
   }
@@ -142,12 +143,15 @@ int enb_stack_lte::init(const stack_args_t& args_, const rrc_cfg_t& rrc_cfg_)
     stack_logger.error("Couldn't initialize S1AP");
     return SRSRAN_ERROR;
   }
-  if (gtpu.init(args.s1ap.gtp_bind_addr,
-                args.s1ap.mme_addr,
-                args.embms.m1u_multiaddr,
-                args.embms.m1u_if_addr,
-                &pdcp,
-                args.embms.enable)) {
+
+  gtpu_args_t gtpu_args;
+  gtpu_args.embms_enable                 = args.embms.enable;
+  gtpu_args.embms_m1u_multiaddr          = args.embms.m1u_multiaddr;
+  gtpu_args.embms_m1u_if_addr            = args.embms.m1u_if_addr;
+  gtpu_args.mme_addr                     = args.s1ap.mme_addr;
+  gtpu_args.gtp_bind_addr                = args.s1ap.gtp_bind_addr;
+  gtpu_args.indirect_tunnel_timeout_msec = args.gtpu_indirect_tunnel_timeout_msec;
+  if (gtpu.init(gtpu_args, gtpu_adapter.get()) != SRSRAN_SUCCESS) {
     stack_logger.error("Couldn't initialize GTPU");
     return SRSRAN_ERROR;
   }
@@ -160,12 +164,13 @@ int enb_stack_lte::init(const stack_args_t& args_, const rrc_cfg_t& rrc_cfg_)
 
 void enb_stack_lte::tti_clock()
 {
-  sync_task_queue.push([this]() { tti_clock_impl(); });
+  if (started.load(std::memory_order_relaxed)) {
+    sync_task_queue.push([this]() { tti_clock_impl(); });
+  }
 }
 
 void enb_stack_lte::tti_clock_impl()
 {
-  trace_complete_event("enb_stack_lte::tti_clock_impl", "total_time");
   task_sched.tic();
   rrc.tti_clock();
 }
@@ -180,7 +185,7 @@ void enb_stack_lte::stop()
 
 void enb_stack_lte::stop_impl()
 {
-  rx_sockets.stop();
+  get_rx_io_manager().stop();
 
   s1ap.stop();
   gtpu.stop();
@@ -210,7 +215,7 @@ void enb_stack_lte::stop_impl()
 bool enb_stack_lte::get_metrics(stack_metrics_t* metrics)
 {
   // use stack thread to query metrics
-  auto ret = enb_task_queue.try_push([this]() {
+  auto ret = metrics_task_queue.try_push([this]() {
     stack_metrics_t metrics{};
     mac.get_metrics(metrics.mac);
     if (not metrics.mac.ues.empty()) {
@@ -224,7 +229,7 @@ bool enb_stack_lte::get_metrics(stack_metrics_t* metrics)
     }
   });
 
-  if (ret.first) {
+  if (ret.has_value()) {
     // wait for result
     *metrics = pending_stack_metrics.pop_blocking();
     return true;
@@ -234,9 +239,18 @@ bool enb_stack_lte::get_metrics(stack_metrics_t* metrics)
 
 void enb_stack_lte::run_thread()
 {
-  while (started) {
+  while (started.load(std::memory_order_relaxed)) {
     task_sched.run_next_task();
   }
+}
+
+void enb_stack_lte::write_pdu(uint16_t rnti, uint32_t lcid, srsran::unique_byte_buffer_t pdu)
+{
+  // call GTPU adapter to map to EPS bearer
+  auto task = [this, rnti, lcid](srsran::unique_byte_buffer_t& pdu) {
+    gtpu_adapter->write_pdu(rnti, lcid, std::move(pdu));
+  };
+  x2_task_queue.push(std::bind(task, std::move(pdu)));
 }
 
 } // namespace srsenb

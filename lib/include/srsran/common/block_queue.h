@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -44,7 +44,6 @@ namespace srsran {
 template <typename myobj>
 class block_queue
 {
-
 public:
   // Callback functions for mutexed operations inside pop/push methods
   class call_mutexed_itf
@@ -105,6 +104,8 @@ public:
     return value;
   }
 
+  bool timedwait_pop(myobj* value, const struct timespec* abstime) { return pop_(value, true, abstime); }
+
   bool empty()
   { // queue is empty?
     pthread_mutex_lock(&mutex);
@@ -116,7 +117,7 @@ public:
   bool full()
   { // queue is full?
     pthread_mutex_lock(&mutex);
-    bool ret = not check_queue_space_unlocked(false);
+    bool ret = not check_queue_space_nolock(false);
     pthread_mutex_unlock(&mutex);
     return ret;
   }
@@ -130,10 +131,17 @@ public:
 
   const myobj& front() const { return q.front(); }
 
-  size_t size() { return q.size(); }
+  size_t size()
+  {
+    size_t len = 0;
+    pthread_mutex_lock(&mutex);
+    len = q.size();
+    pthread_mutex_unlock(&mutex);
+    return len;
+  }
 
 private:
-  bool pop_(myobj* value, bool block)
+  bool pop_(myobj* value, bool block, const struct timespec* abstime = nullptr)
   {
     if (!enable) {
       return false;
@@ -145,7 +153,13 @@ private:
       goto exit;
     }
     while (q.empty() && enable) {
-      pthread_cond_wait(&cv_empty, &mutex);
+      if (abstime == nullptr) {
+        pthread_cond_wait(&cv_empty, &mutex);
+      } else {
+        if (pthread_cond_timedwait(&cv_empty, &mutex, abstime)) {
+          goto exit;
+        }
+      }
     }
     if (!enable) {
       goto exit;
@@ -165,7 +179,7 @@ private:
     return ret;
   }
 
-  bool check_queue_space_unlocked(bool block)
+  bool check_queue_space_nolock(bool block)
   {
     num_threads++;
     if (capacity > 0) {
@@ -192,7 +206,7 @@ private:
       return std::move(value);
     }
     pthread_mutex_lock(&mutex);
-    bool ret = check_queue_space_unlocked(block);
+    bool ret = check_queue_space_nolock(block);
     if (ret) {
       if (mutexed_callback) {
         mutexed_callback->pushing(value);
@@ -212,7 +226,7 @@ private:
       return false;
     }
     pthread_mutex_lock(&mutex);
-    bool ret = check_queue_space_unlocked(block);
+    bool ret = check_queue_space_nolock(block);
     if (ret) {
       if (mutexed_callback) {
         mutexed_callback->pushing(value);

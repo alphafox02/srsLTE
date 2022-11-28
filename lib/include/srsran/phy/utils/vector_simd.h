@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -47,6 +47,8 @@ SRSRAN_API cf_t srsran_vec_acc_cc_simd(const cf_t* x, int len);
 SRSRAN_API void srsran_vec_add_fff_simd(const float* x, const float* y, float* z, int len);
 
 SRSRAN_API void srsran_vec_sub_fff_simd(const float* x, const float* y, float* z, int len);
+
+SRSRAN_API void srsran_vec_sc_sum_fff_simd(const float* x, float h, float* z, int len);
 
 /* SIMD Vector Scalar Product */
 SRSRAN_API void srsran_vec_sc_prod_cfc_simd(const cf_t* x, const float h, cf_t* y, const int len);
@@ -130,7 +132,7 @@ SRSRAN_API void srsran_vec_interleave_simd(const cf_t* x, const cf_t* y, cf_t* z
 
 SRSRAN_API void srsran_vec_interleave_add_simd(const cf_t* x, const cf_t* y, cf_t* z, const int len);
 
-SRSRAN_API void srsran_vec_gen_sine_simd(cf_t amplitude, float freq, cf_t* z, int len);
+SRSRAN_API cf_t srsran_vec_gen_sine_simd(cf_t amplitude, float freq, cf_t* z, int len);
 
 SRSRAN_API void srsran_vec_apply_cfo_simd(const cf_t* x, float cfo, cf_t* z, int len);
 

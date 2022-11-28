@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -21,8 +21,8 @@
 
 #include "srsenb/hdr/stack/rrc/rrc_bearer_cfg.h"
 #include "srsenb/hdr/common/common_enb.h"
+#include "srsran/asn1/obj_id_cmp_utils.h"
 #include "srsran/asn1/rrc_utils.h"
-#include "srsran/rrc/rrc_cfg_utils.h"
 
 namespace srsenb {
 
@@ -221,12 +221,12 @@ void bearer_cfg_handler::reestablish_bearers(bearer_cfg_handler&& old_rnti_beare
   old_rnti_bearers.current_drbs.clear();
 }
 
-int bearer_cfg_handler::add_erab(uint8_t                                            erab_id,
-                                 const asn1::s1ap::erab_level_qos_params_s&         qos,
-                                 const asn1::bounded_bitstring<1, 160, true, true>& addr,
-                                 uint32_t                                           teid_out,
-                                 srsran::const_span<uint8_t>                        nas_pdu,
-                                 asn1::s1ap::cause_c&                               cause)
+int bearer_cfg_handler::addmod_erab(uint8_t                                            erab_id,
+                                    const asn1::s1ap::erab_level_qos_params_s&         qos,
+                                    const asn1::bounded_bitstring<1, 160, true, true>& addr,
+                                    uint32_t                                           teid_out,
+                                    srsran::const_span<uint8_t>                        nas_pdu,
+                                    asn1::s1ap::cause_c&                               cause)
 {
   if (erab_id < 5) {
     logger->error("ERAB id=%d is invalid", erab_id);
@@ -267,19 +267,14 @@ int bearer_cfg_handler::add_erab(uint8_t                                        
   }
   const rrc_cfg_qci_t& qci_cfg = qci_it->second;
 
-  erabs[erab_id].id         = erab_id;
-  erabs[erab_id].lcid       = lcid;
-  erabs[erab_id].qos_params = qos;
-  erabs[erab_id].address    = addr;
-  erabs[erab_id].teid_out   = teid_out;
-
+  // perform checks on QCI config
   if (addr.length() > 32) {
     logger->error("Only addresses with length <= 32 are supported");
     cause.set_radio_network().value = asn1::s1ap::cause_radio_network_opts::invalid_qos_combination;
     return SRSRAN_ERROR;
   }
   if (qos.gbr_qos_info_present and not qci_cfg.configured) {
-    logger->warning("Provided E-RAB id=%d QoS not supported", erab_id);
+    logger->error("Provided E-RAB id=%d QoS not supported", erab_id);
     cause.set_radio_network().value = asn1::s1ap::cause_radio_network_opts::invalid_qos_combination;
     return SRSRAN_ERROR;
   }
@@ -289,20 +284,28 @@ int bearer_cfg_handler::add_erab(uint8_t                                        
     int16_t  pbr_kbps = qci_cfg.lc_cfg.prioritised_bit_rate.to_number();
     uint64_t pbr      = pbr_kbps < 0 ? std::numeric_limits<uint64_t>::max() : pbr_kbps * 1000u;
     if (req_bitrate > pbr) {
-      logger->warning("Provided E-RAB id=%d QoS not supported (guaranteed bitrates)", erab_id);
+      logger->error("Provided E-RAB id=%d QoS not supported (guaranteed bitrates)", erab_id);
       cause.set_radio_network().value = asn1::s1ap::cause_radio_network_opts::invalid_qos_combination;
       return SRSRAN_ERROR;
     }
   }
-  if (qos.alloc_retention_prio.pre_emption_cap.value == asn1::s1ap::pre_emption_cap_opts::may_trigger_pre_emption and
-      qos.alloc_retention_prio.prio_level < qci_cfg.lc_cfg.prio) {
-    logger->warning("Provided E-RAB id=%d QoS not supported (priority %d < %d)",
-                    erab_id,
-                    qos.alloc_retention_prio.prio_level,
-                    qci_cfg.lc_cfg.prio);
-    cause.set_radio_network().value = asn1::s1ap::cause_radio_network_opts::invalid_qos_combination;
-    return SRSRAN_ERROR;
+
+  // If it is an E-RAB modification, remove previous DRB object
+  if (erabs.count(erab_id) > 0) {
+    for (auto& drb : current_drbs) {
+      if (drb.eps_bearer_id_present and drb.eps_bearer_id == erab_id) {
+        srsran::rem_rrc_obj_id(current_drbs, drb.drb_id);
+        break;
+      }
+    }
   }
+
+  // Consider ERAB as accepted
+  erabs[erab_id].id         = erab_id;
+  erabs[erab_id].lcid       = lcid;
+  erabs[erab_id].qos_params = qos;
+  erabs[erab_id].address    = addr;
+  erabs[erab_id].teid_out   = teid_out;
 
   if (not nas_pdu.empty()) {
     erab_info_list[erab_id].assign(nas_pdu.begin(), nas_pdu.end());
@@ -368,8 +371,7 @@ int bearer_cfg_handler::modify_erab(uint8_t                                    e
   }
   auto     address  = erab_it->second.address;
   uint32_t teid_out = erab_it->second.teid_out;
-  release_erab(erab_id);
-  return add_erab(erab_id, qos, address, teid_out, nas_pdu, cause);
+  return addmod_erab(erab_id, qos, address, teid_out, nas_pdu, cause);
 }
 
 int bearer_cfg_handler::add_gtpu_bearer(uint32_t erab_id)
@@ -401,9 +403,10 @@ srsran::expected<uint32_t> bearer_cfg_handler::add_gtpu_bearer(uint32_t         
   // Initialize ERAB tunnel in GTPU right-away. DRBs are only created during RRC setup/reconf
   erab_t&             erab = it->second;
   erab_t::gtpu_tunnel bearer;
+  uint32_t            addr_in;
   bearer.teid_out                   = teid_out;
   bearer.addr                       = addr;
-  srsran::expected<uint32_t> teidin = gtpu->add_bearer(rnti, erab.lcid, addr, teid_out, props);
+  srsran::expected<uint32_t> teidin = gtpu->add_bearer(rnti, erab.id, addr, teid_out, addr_in, props);
   if (teidin.is_error()) {
     logger->error("Adding erab_id=%d to GTPU", erab_id);
     return srsran::default_error_t();
@@ -415,12 +418,7 @@ srsran::expected<uint32_t> bearer_cfg_handler::add_gtpu_bearer(uint32_t         
 
 void bearer_cfg_handler::rem_gtpu_bearer(uint32_t erab_id)
 {
-  auto it = erabs.find(erab_id);
-  if (it == erabs.end()) {
-    logger->warning("Removing erab_id=%d from GTPU", erab_id);
-    return;
-  }
-  gtpu->rem_bearer(rnti, it->second.lcid);
+  gtpu->rem_bearer(rnti, erab_id);
 }
 
 void bearer_cfg_handler::fill_pending_nas_info(asn1::rrc::rrc_conn_recfg_r8_ies_s* msg)
@@ -449,7 +447,7 @@ void bearer_cfg_handler::fill_pending_nas_info(asn1::rrc::rrc_conn_recfg_r8_ies_
         memcpy(msg->ded_info_nas_list[idx].data(), &erab_info[0], erab_info.size());
         erab_info_list.erase(info_it);
       } else {
-        logger->info("Not adding NAS message to connection reconfiguration. E-RAB id %d", erab_id);
+        logger->debug("Not adding NAS message to connection reconfiguration. E-RAB id %d", erab_id);
       }
       idx++;
     }

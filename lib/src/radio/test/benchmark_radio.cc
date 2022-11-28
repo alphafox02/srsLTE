@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -34,6 +34,7 @@ extern "C" {
 //#undef I // Fix complex.h #define I nastiness when using C++
 #endif
 
+#include "srsran/common/tsan_options.h"
 #include "srsran/phy/utils/debug.h"
 #include "srsran/radio/radio.h"
 
@@ -64,6 +65,7 @@ static pthread_t radio_thread;
 #include "srsgui/srsgui.h"
 #include <semaphore.h>
 static pthread_t   plot_thread;
+static bool        plot_thread_launched = false;
 static sem_t       plot_sem;
 static uint32_t    plot_sf_idx                          = 0;
 static plot_real_t fft_plot[SRSRAN_MAX_RADIOS]          = {};
@@ -154,7 +156,7 @@ void parse_args(int argc, char** argv)
         fft_plot_enable ^= true;
         break;
       case 'v':
-        srsran_verbose++;
+        increase_srsran_verbose_level();
         break;
       case 'h':
       default:
@@ -255,6 +257,7 @@ static int init_plots(uint32_t frame_size)
     perror("pthread_create");
     exit(-1);
   }
+  plot_thread_launched = true;
 
   return SRSRAN_SUCCESS;
 }
@@ -323,7 +326,10 @@ static void* radio_thread_run(void* arg)
 
 #ifdef ENABLE_GUI
   if (fft_plot_enable) {
-    init_plots(frame_size);
+    if (init_plots(frame_size) != SRSRAN_SUCCESS) {
+      ERROR("Error: Could not init plots");
+      goto clean_exit;
+    }
     sleep(1);
   }
 #endif /* ENABLE_GUI */
@@ -582,18 +588,22 @@ clean_exit:
   srsran_dft_plan_free(&idft_plan);
 
 #ifdef ENABLE_GUI
-  pthread_join(plot_thread, NULL);
-  srsran_dft_plan_free(&dft_spectrum);
-  for (uint32_t r = 0; r < nof_radios; r++) {
-    for (uint32_t p = 0; p < nof_ports; p++) {
-      uint32_t plot_idx = r * nof_ports + p;
-      if (fft_plot_buffer[plot_idx]) {
-        free(fft_plot_buffer[plot_idx]);
+  if (fft_plot_enable) {
+    if (plot_thread_launched == true) {
+      pthread_join(plot_thread, NULL);
+    }
+    srsran_dft_plan_free(&dft_spectrum);
+    for (uint32_t r = 0; r < nof_radios; r++) {
+      for (uint32_t p = 0; p < nof_ports; p++) {
+        uint32_t plot_idx = r * nof_ports + p;
+        if (fft_plot_buffer[plot_idx]) {
+          free(fft_plot_buffer[plot_idx]);
+        }
       }
     }
-  }
-  if (fft_plot_temp) {
-    free(fft_plot_temp);
+    if (fft_plot_temp) {
+      free(fft_plot_temp);
+    }
   }
 #endif /* ENABLE_GUI */
 

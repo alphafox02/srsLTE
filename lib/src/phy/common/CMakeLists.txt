@@ -1,5 +1,5 @@
 #
-# Copyright 2013-2021 Software Radio Systems Limited
+# Copyright 2013-2022 Software Radio Systems Limited
 #
 # This file is part of srsRAN
 #
@@ -18,7 +18,7 @@
 # and at http://www.gnu.org/licenses/.
 #
 
-set(SOURCES phy_common.c phy_common_sl.c  phy_common_nr.c sequence.c timestamp.c zc_sequence.c)
+set(SOURCES phy_common.c phy_common_sl.c  phy_common_nr.c sequence.c timestamp.c zc_sequence.c sliv.c)
 add_library(srsran_phy_common OBJECT ${SOURCES})
 
 add_subdirectory(test)

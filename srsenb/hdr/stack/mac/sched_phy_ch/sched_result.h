@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -22,7 +22,8 @@
 #ifndef SRSRAN_SCHED_RESULT_H
 #define SRSRAN_SCHED_RESULT_H
 
-#include "../sched_common.h"
+#include "../sched_lte_common.h"
+#include "srsenb/hdr/stack/mac/sched_phy_ch/sched_phy_resource.h"
 
 namespace srsenb {
 

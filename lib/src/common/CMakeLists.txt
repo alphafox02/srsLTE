@@ -1,5 +1,5 @@
 #
-# Copyright 2013-2021 Software Radio Systems Limited
+# Copyright 2013-2022 Software Radio Systems Limited
 #
 # This file is part of srsRAN
 #
@@ -18,12 +18,12 @@
 # and at http://www.gnu.org/licenses/.
 #
 
-
 set(SOURCES arch_select.cc
             enb_events.cc
             backtrace.c
             byte_buffer.cc
             band_helper.cc
+            bearer_manager.cc
             buffer_pool.cc
             crash_handler.cc
             gen_mch_tables.c
@@ -34,8 +34,12 @@ set(SOURCES arch_select.cc
             network_utils.cc
             mac_pcap_net.cc
             pcap.c
+            phy_cfg_nr.cc
+            phy_cfg_nr_default.cc
+            rrc_common.cc
             rlc_pcap.cc
             s1ap_pcap.cc
+            ngap_pcap.cc
             security.cc
             standard_streams.cc
             thread_pool.cc
@@ -44,8 +48,7 @@ set(SOURCES arch_select.cc
             time_prof.cc
             version.c
             zuc.cc
-            s3g.cc
-            basic_vnf.cc)
+            s3g.cc)
 
 # Avoid warnings caused by libmbedtls about deprecated functions
 set_source_files_properties(security.cc PROPERTIES COMPILE_FLAGS -Wno-deprecated-declarations)
@@ -57,9 +60,9 @@ add_dependencies(srsran_common gen_build_info)
 add_executable(arch_select arch_select.cc)
 
 target_include_directories(srsran_common PUBLIC ${SEC_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR} ${BACKWARD_INCLUDE_DIRS})
-target_link_libraries(srsran_common srsran_phy srslog ${SEC_LIBRARIES} ${BACKWARD_LIBRARIES} ${SCTP_LIBRARIES})
+target_link_libraries(srsran_common srsran_phy support srslog ${SEC_LIBRARIES} ${BACKWARD_LIBRARIES} ${SCTP_LIBRARIES})
 target_compile_definitions(srsran_common PRIVATE ${BACKWARD_DEFINITIONS})
 
-INSTALL(TARGETS srsran_common DESTINATION ${LIBRARY_DIR})
+install(TARGETS srsran_common DESTINATION ${LIBRARY_DIR} OPTIONAL)
 
 add_subdirectory(test)

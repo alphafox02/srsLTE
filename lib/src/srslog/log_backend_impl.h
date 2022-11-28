@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -38,7 +38,7 @@ public:
   log_backend_impl(const log_backend_impl& other) = delete;
   log_backend_impl& operator=(const log_backend_impl& other) = delete;
 
-  void start() override { worker.start(); }
+  void start(backend_priority priority = backend_priority::normal) override { worker.start(priority); }
 
   bool push(detail::log_entry&& entry) override
   {

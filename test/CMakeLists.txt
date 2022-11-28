@@ -1,5 +1,5 @@
 #
-# Copyright 2013-2021 Software Radio Systems Limited
+# Copyright 2013-2022 Software Radio Systems Limited
 #
 # This file is part of srsRAN
 #
@@ -31,3 +31,5 @@ if (ZEROMQ_FOUND AND ENABLE_ZMQ_TEST)
     endforeach (cell_n_prb)
   endforeach (num_cc)
 endif (ZEROMQ_FOUND AND ENABLE_ZMQ_TEST)
+
+add_subdirectory(phy)

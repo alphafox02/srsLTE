@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -24,7 +24,7 @@
 
 #include "detail/type_storage.h"
 #include "expected.h"
-#include "srsran/common/srsran_assert.h"
+#include "srsran/support/srsran_assert.h"
 #include <array>
 
 namespace srsran {
@@ -99,7 +99,12 @@ public:
   {
   public:
     const_iterator() = default;
-    const_iterator(const static_circular_map<K, T, N>* map, size_t idx_) : ptr(map), idx(idx_) {}
+    const_iterator(const static_circular_map<K, T, N>* map, size_t idx_) : ptr(map), idx(idx_)
+    {
+      if (idx < ptr->capacity() and not ptr->present[idx]) {
+        ++(*this);
+      }
+    }
 
     const_iterator& operator++()
     {

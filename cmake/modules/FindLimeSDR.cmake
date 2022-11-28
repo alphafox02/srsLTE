@@ -1,5 +1,5 @@
 #
-# Copyright 2013-2021 Software Radio Systems Limited
+# Copyright 2013-2022 Software Radio Systems Limited
 #
 # This file is part of srsRAN
 #
@@ -23,13 +23,16 @@ if(NOT LIMESDR_FOUND)
 
   find_path(LIMESDR_INCLUDE_DIRS 
     NAMES LimeSuite.h
+    HINTS $ENV{LIMESUITE_DIR}/include
     PATHS ${LIMESDR_PKG_INCLUDE_DIRS}
           /usr/include/lime
           /usr/local/include/lime
+          $ENV{LIMESUITE_DIR}/include/lime
   )
 
   find_library(LIMESDR_LIBRARIES 
     NAMES LimeSuite
+    HINTS $ENV{LIMESUITE_DIR}/lib
     PATHS ${LIMESDR_PKG_LIBRARY_DIRS}
           /usr/lib
           /usr/local/lib

@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -22,10 +22,17 @@
 #ifndef SRSUE_RRC_METRICS_H
 #define SRSUE_RRC_METRICS_H
 
-#include "rrc_common.h"
 #include "srsran/interfaces/phy_interface_types.h"
 
 namespace srsue {
+
+// RRC states (3GPP 36.331 v10.0.0)
+typedef enum {
+  RRC_STATE_IDLE = 0,
+  RRC_STATE_CONNECTED,
+  RRC_STATE_N_ITEMS,
+} rrc_state_t;
+static const char rrc_state_text[RRC_STATE_N_ITEMS][100] = {"IDLE", "CONNECTED"};
 
 struct rrc_metrics_t {
   rrc_state_t             state;

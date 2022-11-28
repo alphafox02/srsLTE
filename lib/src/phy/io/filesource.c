@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -26,7 +26,7 @@
 #include "srsran/phy/io/filesource.h"
 #include "srsran/phy/utils/debug.h"
 
-int srsran_filesource_init(srsran_filesource_t* q, char* filename, srsran_datatype_t type)
+int srsran_filesource_init(srsran_filesource_t* q, const char* filename, srsran_datatype_t type)
 {
   bzero(q, sizeof(srsran_filesource_t));
   q->f = fopen(filename, "r");

@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -266,8 +266,10 @@ int srsran_ssss_find(srsran_ssss_t* q, cf_t* input, uint32_t nof_prb, uint32_t N
     float    peak_1_value = q->shifted_output_abs[peak_1_pos];
     if ((peak_1_pos >= (q->corr_peak_pos - (symbol_sz + cp_len) - 2)) &&
         (peak_1_pos <= (q->corr_peak_pos - (symbol_sz + cp_len) + 2))) {
+      // Skip.
     } else if ((peak_1_pos >= (q->corr_peak_pos + (symbol_sz + cp_len) - 2)) &&
                (peak_1_pos <= (q->corr_peak_pos + (symbol_sz + cp_len) + 2))) {
+      // Skip.
     } else {
       q->corr_peak_pos = -1;
       continue;
@@ -279,8 +281,10 @@ int srsran_ssss_find(srsran_ssss_t* q, cf_t* input, uint32_t nof_prb, uint32_t N
     float    peak_2_value = q->shifted_output_abs[peak_2_pos];
     if ((peak_2_pos >= (q->corr_peak_pos - (symbol_sz + cp_len) - 2)) &&
         (peak_2_pos <= (q->corr_peak_pos - (symbol_sz + cp_len) + 2))) {
+      // Skip.
     } else if ((peak_2_pos >= (q->corr_peak_pos + (symbol_sz + cp_len) - 2)) &&
                (peak_2_pos <= (q->corr_peak_pos + (symbol_sz + cp_len) + 2))) {
+      // Skip.
     } else {
       q->corr_peak_pos = -1;
       continue;

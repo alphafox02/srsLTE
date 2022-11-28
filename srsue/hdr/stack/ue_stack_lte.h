@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -26,20 +26,11 @@
 #ifndef SRSUE_UE_STACK_LTE_H
 #define SRSUE_UE_STACK_LTE_H
 
-#include <functional>
-#include <pthread.h>
-#include <stdarg.h>
-#include <string>
-
 #include "mac/mac.h"
 #include "mac_nr/mac_nr.h"
 #include "rrc/rrc.h"
-#include "srsran/radio/radio.h"
-#include "srsran/upper/pdcp.h"
-#include "srsran/upper/rlc.h"
-#include "upper/nas.h"
-#include "upper/usim.h"
-
+#include "rrc_nr/rrc_nr.h"
+#include "srsran/common/bearer_manager.h"
 #include "srsran/common/buffer_pool.h"
 #include "srsran/common/multiqueue.h"
 #include "srsran/common/string_helpers.h"
@@ -47,12 +38,45 @@
 #include "srsran/common/thread_pool.h"
 #include "srsran/common/time_prof.h"
 #include "srsran/interfaces/ue_interfaces.h"
+#include "srsran/radio/radio.h"
+#include "srsran/rlc/rlc.h"
+#include "srsran/upper/pdcp.h"
 #include "srsue/hdr/ue_metrics_interface.h"
 #include "ue_stack_base.h"
+#include "upper/nas.h"
+#include "upper/nas_5g.h"
+#include "upper/sdap.h"
+#include "upper/usim.h"
+#include <functional>
+#include <pthread.h>
+#include <stdarg.h>
+#include <string>
 
 namespace srsue {
 
 class phy_interface_stack_lte;
+
+class sdap_pdcp_adapter : public pdcp_interface_sdap_nr, public gw_interface_pdcp
+{
+public:
+  sdap_pdcp_adapter(pdcp* parent_pdcp_, sdap* parent_sdap_) : parent_pdcp(parent_pdcp_), parent_sdap(parent_sdap_) {}
+  void write_sdu(uint32_t lcid, srsran::unique_byte_buffer_t pdu) final
+  {
+    parent_pdcp->write_sdu(lcid, std::move(pdu));
+  }
+  void write_pdu(uint32_t lcid, srsran::unique_byte_buffer_t pdu) final
+  {
+    parent_sdap->write_pdu(lcid, std::move(pdu));
+  }
+  void write_pdu_mch(uint32_t lcid, srsran::unique_byte_buffer_t pdu) final
+  {
+    // not implemented
+  }
+
+private:
+  pdcp* parent_pdcp = nullptr;
+  sdap* parent_sdap = nullptr;
+};
 
 class ue_stack_lte final : public ue_stack_base,
                            public stack_interface_phy_lte,
@@ -92,6 +116,7 @@ public:
   void cell_select_complete(bool status) final;
   void set_config_complete(bool status) final;
   void set_scell_complete(bool status) final;
+  void set_phy_config_complete(bool status) final;
 
   // MAC Interface for EUTRA PHY
   uint16_t get_dl_sched_rnti(uint32_t tti) final { return mac.get_dl_sched_rnti(tti); }
@@ -120,19 +145,17 @@ public:
     mac.bch_decoded_ok(cc_idx, payload, len);
   }
 
-  void mch_decoded(uint32_t len, bool crc) final { mac.mch_decoded(len, crc); }
-
-  void new_mch_dl(const srsran_pdsch_grant_t& phy_grant, mac_interface_phy_lte::tb_action_dl_t* action) final
-  {
-    mac.new_mch_dl(phy_grant, action);
-  }
+  void mch_decoded(uint32_t len, bool crc, uint8_t* payload) final { mac.mch_decoded(len, crc, payload); }
 
   void set_mbsfn_config(uint32_t nof_mbsfn_services) final { mac.set_mbsfn_config(nof_mbsfn_services); }
 
   void run_tti(uint32_t tti, uint32_t tti_jump) final;
 
+  // RRC interface for NR PHY
+  void cell_search_found_cell(const cell_search_result_t& result) final;
+  void cell_select_completed(const cell_select_result_t& result) final;
+
   // MAC Interface for NR PHY
-  int  sf_indication(const uint32_t tti) final { return SRSRAN_SUCCESS; }
   void tb_decoded(const uint32_t                              cc_idx,
                   const mac_nr_grant_dl_t&                    grant,
                   mac_interface_phy_nr::tb_action_dl_result_t result) final
@@ -152,11 +175,6 @@ public:
     mac_nr.new_grant_ul(cc_idx, grant, action);
   }
 
-  void run_tti(const uint32_t tti) final
-  {
-    // ignored, timing will be handled by EUTRA
-  }
-
   void prach_sent(uint32_t tti, uint32_t s_id, uint32_t t_id, uint32_t f_id, uint32_t ul_carrier_id) final
   {
     mac_nr.prach_sent(tti, s_id, t_id, f_id, ul_carrier_id);
@@ -168,12 +186,14 @@ public:
   }
 
   // Interface for GW
-  void write_sdu(uint32_t lcid, srsran::unique_byte_buffer_t sdu) final;
-
-  bool is_lcid_enabled(uint32_t lcid) final { return pdcp.is_lcid_enabled(lcid); }
+  void write_sdu(uint32_t eps_bearer_id, srsran::unique_byte_buffer_t sdu) final;
+  bool has_active_radio_bearer(uint32_t eps_bearer_id) final;
 
   // Interface for RRC
   tti_point get_current_tti() final { return current_tti; }
+  void      add_eps_bearer(uint8_t eps_bearer_id, srsran::srsran_rat_t rat, uint32_t lcid) final;
+  void      remove_eps_bearer(uint8_t eps_bearer_id) final;
+  void      reset_eps_bearers() final;
 
   srsran::ext_task_sched_handle get_task_sched() { return {&task_sched}; }
 
@@ -186,7 +206,7 @@ private:
   const std::chrono::milliseconds TTI_WARN_THRESHOLD_MS{5};
   const uint32_t                  SYNC_QUEUE_WARN_THRESHOLD = 5;
 
-  bool                running;
+  std::atomic<bool>   running{false};
   srsue::stack_args_t args;
 
   srsran::tti_point current_tti;
@@ -199,10 +219,13 @@ private:
   srslog::basic_logger& rrc_logger;
   srslog::basic_logger& usim_logger;
   srslog::basic_logger& nas_logger;
+  srslog::basic_logger& nas5g_logger;
 
-  // UE nr stack logging
+  // UE NR stack logging
   srslog::basic_logger& mac_nr_logger;
   srslog::basic_logger& rrc_nr_logger;
+  srslog::basic_logger& rlc_nr_logger;
+  srslog::basic_logger& pdcp_nr_logger;
 
   // tracing
   srsran::mac_pcap mac_pcap;
@@ -229,12 +252,21 @@ private:
   srsran::pdcp               pdcp;
   srsue::rrc                 rrc;
   srsue::mac_nr              mac_nr;
+  srsran::rlc                rlc_nr;
+  srsran::pdcp               pdcp_nr;
   srsue::rrc_nr              rrc_nr;
   srsue::nas                 nas;
+  srsue::nas_5g              nas_5g;
   std::unique_ptr<usim_base> usim;
 
+  // SDAP only applies to NR
+  srsue::sdap       sdap;
+  sdap_pdcp_adapter sdap_pdcp;
+
+  ue_bearer_manager bearers; // helper to manage mapping between EPS and radio bearers
+
   // Metrics helper
-  uint32_t ul_dropped_sdus = 0;
+  std::atomic<uint32_t> ul_dropped_sdus{0};
 };
 
 } // namespace srsue

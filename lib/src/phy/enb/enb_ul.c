@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -46,19 +46,7 @@ int srsran_enb_ul_init(srsran_enb_ul_t* q, cf_t* in_buffer, uint32_t max_prb)
       perror("malloc");
       goto clean_exit;
     }
-
-    srsran_ofdm_cfg_t ofdm_cfg = {};
-    ofdm_cfg.nof_prb           = max_prb;
-    ofdm_cfg.in_buffer         = in_buffer;
-    ofdm_cfg.out_buffer        = q->sf_symbols;
-    ofdm_cfg.cp                = SRSRAN_CP_NORM;
-    ofdm_cfg.freq_shift_f      = -0.5f;
-    ofdm_cfg.normalize         = false;
-    ofdm_cfg.rx_window_offset  = 0.5f;
-    if (srsran_ofdm_rx_init_cfg(&q->fft, &ofdm_cfg)) {
-      ERROR("Error initiating FFT");
-      goto clean_exit;
-    }
+    q->in_buffer = in_buffer;
 
     if (srsran_pucch_init_enb(&q->pucch)) {
       ERROR("Error creating PUCCH object");
@@ -117,6 +105,18 @@ int srsran_enb_ul_set_cell(srsran_enb_ul_t*                   q,
     if (cell.id != q->cell.id || q->cell.nof_prb == 0) {
       q->cell = cell;
 
+      srsran_ofdm_cfg_t ofdm_cfg = {};
+      ofdm_cfg.nof_prb           = q->cell.nof_prb;
+      ofdm_cfg.in_buffer         = q->in_buffer;
+      ofdm_cfg.out_buffer        = q->sf_symbols;
+      ofdm_cfg.cp                = q->cell.cp;
+      ofdm_cfg.freq_shift_f      = -0.5f;
+      ofdm_cfg.normalize         = false;
+      ofdm_cfg.rx_window_offset  = 0.5f;
+      if (srsran_ofdm_rx_init_cfg(&q->fft, &ofdm_cfg)) {
+        ERROR("Error initiating FFT");
+        return SRSRAN_ERROR;
+      }
       if (srsran_ofdm_rx_set_prb(&q->fft, q->cell.cp, q->cell.nof_prb)) {
         ERROR("Error initiating FFT");
         return SRSRAN_ERROR;
@@ -193,7 +193,9 @@ static int get_pucch(srsran_enb_ul_t* q, srsran_ul_sf_cfg_t* ul_sf, srsran_pucch
       ERROR("Error estimating PUCCH DMRS");
       return SRSRAN_ERROR;
     }
-    pucch_res.snr_db = q->chest_res.snr_db;
+    pucch_res.snr_db    = q->chest_res.snr_db;
+    pucch_res.rssi_dbFs = q->chest_res.epre_dBfs;
+    pucch_res.ni_dbFs   = q->chest_res.noise_estimate_dbFs;
 
     ret = srsran_pucch_decode(&q->pucch, ul_sf, cfg, &q->chest_res, q->sf_symbols, &pucch_res);
     if (ret < SRSRAN_SUCCESS) {
@@ -214,7 +216,7 @@ static int get_pucch(srsran_enb_ul_t* q, srsran_ul_sf_cfg_t* ul_sf, srsran_pucch
 
       // Compares correlation value, it stores the PUCCH result with the greatest correlation
       if (i == 0 || pucch_res.correlation > res->correlation) {
-        // Copy measurements only if PUCCH was decoded succesfully
+        // Copy measurements only if PUCCH was decoded successfully
         if (cfg->meas_ta_en) {
           pucch_res.ta_valid = !(isnan(q->chest_res.ta_us) || isinf(q->chest_res.ta_us));
           pucch_res.ta_us    = q->chest_res.ta_us;

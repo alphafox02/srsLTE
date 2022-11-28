@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -20,6 +20,7 @@
  */
 
 #include "srsran/asn1/rrc_utils.h"
+#include "srsran/asn1/obj_id_cmp_utils.h"
 #include "srsran/asn1/rrc.h"
 #include "srsran/config.h"
 #include <algorithm>
@@ -141,7 +142,9 @@ srsran::rlc_config_t make_rlc_config_t(const asn1::rrc::rlc_cfg_c& asn1_type)
       rlc_cfg.rlc_mode             = rlc_mode_t::am;
       rlc_cfg.am.t_poll_retx       = asn1_type.am().ul_am_rlc.t_poll_retx.to_number();
       rlc_cfg.am.poll_pdu          = asn1_type.am().ul_am_rlc.poll_pdu.to_number();
-      rlc_cfg.am.poll_byte         = asn1_type.am().ul_am_rlc.poll_byte.to_number() * 1000; // KB
+      rlc_cfg.am.poll_byte         = asn1_type.am().ul_am_rlc.poll_byte.to_number() < 0
+                                         ? -1
+                                         : asn1_type.am().ul_am_rlc.poll_byte.to_number() * 1000; // KB
       rlc_cfg.am.max_retx_thresh   = asn1_type.am().ul_am_rlc.max_retx_thres.to_number();
       rlc_cfg.am.t_reordering      = asn1_type.am().dl_am_rlc.t_reordering.to_number();
       rlc_cfg.am.t_status_prohibit = asn1_type.am().dl_am_rlc.t_status_prohibit.to_number();
@@ -566,7 +569,8 @@ void set_phy_cfg_t_dedicated_cfg(phy_cfg_t* cfg, const asn1::rrc::phys_cfg_ded_s
           cqi_report_periodic.cqi_format_ind_periodic_r10.type().value ==
           asn1::rrc::cqi_report_periodic_r10_c::setup_s_::cqi_format_ind_periodic_r10_c_::types::subband_cqi_r10;
       if (cfg->dl_cfg.cqi_report.format_is_subband) {
-        cfg->dl_cfg.cqi_report.subband_size = cqi_report_periodic.cqi_format_ind_periodic_r10.subband_cqi_r10().k;
+        cfg->dl_cfg.cqi_report.subband_wideband_ratio =
+            cqi_report_periodic.cqi_format_ind_periodic_r10.subband_cqi_r10().k;
       }
       if (cqi_report_periodic.ri_cfg_idx_present) {
         cfg->dl_cfg.cqi_report.ri_idx         = cqi_report_periodic.ri_cfg_idx;
@@ -593,7 +597,7 @@ void set_phy_cfg_t_dedicated_cfg(phy_cfg_t* cfg, const asn1::rrc::phys_cfg_ded_s
             asn1_type.cqi_report_cfg.cqi_report_periodic.setup().cqi_format_ind_periodic.type().value ==
             asn1::rrc::cqi_report_periodic_c::setup_s_::cqi_format_ind_periodic_c_::types::subband_cqi;
         if (cfg->dl_cfg.cqi_report.format_is_subband) {
-          cfg->dl_cfg.cqi_report.subband_size =
+          cfg->dl_cfg.cqi_report.subband_wideband_ratio =
               asn1_type.cqi_report_cfg.cqi_report_periodic.setup().cqi_format_ind_periodic.subband_cqi().k;
         }
         if (asn1_type.cqi_report_cfg.cqi_report_periodic.setup().ri_cfg_idx_present) {
@@ -869,7 +873,7 @@ void set_phy_cfg_t_scell_config(phy_cfg_t* cfg, const asn1::rrc::scell_to_add_mo
                   cqi_cfg.cqi_format_ind_periodic_r10.type().value ==
                   cqi_cfg_t::cqi_format_ind_periodic_r10_c_::types::subband_cqi_r10;
               if (cfg->dl_cfg.cqi_report.format_is_subband) {
-                cfg->dl_cfg.cqi_report.subband_size = cqi_cfg.cqi_format_ind_periodic_r10.subband_cqi_r10().k;
+                cfg->dl_cfg.cqi_report.subband_wideband_ratio = cqi_cfg.cqi_format_ind_periodic_r10.subband_cqi_r10().k;
               }
               if (cqi_cfg.ri_cfg_idx_present) {
                 cfg->dl_cfg.cqi_report.ri_idx         = cqi_cfg.ri_cfg_idx;
@@ -1093,88 +1097,18 @@ sib13_t make_sib13(const asn1::rrc::sib_type13_r9_s& asn1_type)
   return sib13;
 }
 
-} // namespace srsran
-
-namespace asn1 {
-namespace rrc {
-
 /**************************
- *     RRC Obj Id
+ *     Asn1 Obj Id
  *************************/
 
-uint8_t get_rrc_obj_id(const srb_to_add_mod_s& srb)
-{
-  return srb.srb_id;
-}
-uint8_t get_rrc_obj_id(const drb_to_add_mod_s& drb)
-{
-  return drb.drb_id;
-}
-uint8_t get_rrc_obj_id(const black_cells_to_add_mod_s& obj)
-{
-  return obj.cell_idx;
-}
-uint8_t get_rrc_obj_id(const cells_to_add_mod_s& obj)
-{
-  return obj.cell_idx;
-}
-uint8_t get_rrc_obj_id(const cells_to_add_mod_nr_r15_s& obj)
-{
-  return obj.cell_idx_r15;
-}
-uint8_t get_rrc_obj_id(const meas_obj_to_add_mod_s& obj)
-{
-  return obj.meas_obj_id;
-}
-uint8_t get_rrc_obj_id(const report_cfg_to_add_mod_s& obj)
-{
-  return obj.report_cfg_id;
-}
-uint8_t get_rrc_obj_id(const meas_id_to_add_mod_s& obj)
-{
-  return obj.meas_id;
-}
-uint8_t get_rrc_obj_id(const scell_to_add_mod_r10_s& obj)
-{
-  return obj.scell_idx_r10;
-}
+ASN1_OBJ_ID_DEFINE(asn1::rrc::srb_to_add_mod_s, srb_id);
+ASN1_OBJ_ID_DEFINE(asn1::rrc::drb_to_add_mod_s, drb_id);
+ASN1_OBJ_ID_DEFINE(asn1::rrc::black_cells_to_add_mod_s, cell_idx);
+ASN1_OBJ_ID_DEFINE(asn1::rrc::cells_to_add_mod_s, cell_idx);
+ASN1_OBJ_ID_DEFINE(asn1::rrc::cells_to_add_mod_nr_r15_s, cell_idx_r15);
+ASN1_OBJ_ID_DEFINE(asn1::rrc::meas_obj_to_add_mod_s, meas_obj_id);
+ASN1_OBJ_ID_DEFINE(asn1::rrc::report_cfg_to_add_mod_s, report_cfg_id);
+ASN1_OBJ_ID_DEFINE(asn1::rrc::meas_id_to_add_mod_s, meas_id);
+ASN1_OBJ_ID_DEFINE(asn1::rrc::scell_to_add_mod_r10_s, scell_idx_r10);
 
-void set_rrc_obj_id(srb_to_add_mod_s& srb, uint8_t id)
-{
-  srb.srb_id = id;
-}
-void set_rrc_obj_id(drb_to_add_mod_s& drb, uint8_t id)
-{
-  drb.drb_id = id;
-}
-void set_rrc_obj_id(black_cells_to_add_mod_s& obj, uint8_t id)
-{
-  obj.cell_idx = id;
-}
-void set_rrc_obj_id(cells_to_add_mod_s& obj, uint8_t id)
-{
-  obj.cell_idx = id;
-}
-void set_rrc_obj_id(cells_to_add_mod_nr_r15_s& obj, uint8_t id)
-{
-  obj.cell_idx_r15 = id;
-}
-void set_rrc_obj_id(meas_obj_to_add_mod_s& obj, uint8_t id)
-{
-  obj.meas_obj_id = id;
-}
-void set_rrc_obj_id(report_cfg_to_add_mod_s& obj, uint8_t id)
-{
-  obj.report_cfg_id = id;
-}
-void set_rrc_obj_id(meas_id_to_add_mod_s& obj, uint8_t id)
-{
-  obj.meas_id = id;
-}
-void set_rrc_obj_id(scell_to_add_mod_r10_s& obj, uint8_t id)
-{
-  obj.scell_idx_r10 = id;
-}
-
-} // namespace rrc
-} // namespace asn1
+} // namespace srsran

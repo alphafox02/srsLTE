@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -67,42 +67,43 @@ static const char* pdcp_pdu_type_text[PDCP_PDU_TYPE_N_ITEMS] = {"PDCP Report PDU
 
 // Taken from PDCP-Config (TS 38.331 version 15.2.1)
 enum class pdcp_t_reordering_t {
-  ms0    = 0,
-  ms1    = 1,
-  ms2    = 2,
-  ms4    = 4,
-  ms5    = 5,
-  ms8    = 8,
-  ms10   = 10,
-  ms15   = 15,
-  ms20   = 20,
-  ms30   = 30,
-  ms40   = 40,
-  ms50   = 50,
-  ms60   = 60,
-  ms80   = 80,
-  ms100  = 100,
-  ms120  = 120,
-  ms140  = 140,
-  ms160  = 160,
-  ms180  = 180,
-  ms200  = 200,
-  ms220  = 220,
-  ms240  = 240,
-  ms260  = 260,
-  ms280  = 280,
-  ms300  = 300,
-  ms500  = 500,
-  ms750  = 750,
-  ms1000 = 1000,
-  ms1250 = 1250,
-  ms1500 = 1500,
-  ms1750 = 1750,
-  ms2000 = 2000,
-  ms2250 = 2250,
-  ms2500 = 2500,
-  ms2750 = 2750,
-  ms3000 = 3000
+  ms0      = 0,
+  ms1      = 1,
+  ms2      = 2,
+  ms4      = 4,
+  ms5      = 5,
+  ms8      = 8,
+  ms10     = 10,
+  ms15     = 15,
+  ms20     = 20,
+  ms30     = 30,
+  ms40     = 40,
+  ms50     = 50,
+  ms60     = 60,
+  ms80     = 80,
+  ms100    = 100,
+  ms120    = 120,
+  ms140    = 140,
+  ms160    = 160,
+  ms180    = 180,
+  ms200    = 200,
+  ms220    = 220,
+  ms240    = 240,
+  ms260    = 260,
+  ms280    = 280,
+  ms300    = 300,
+  ms500    = 500,
+  ms750    = 750,
+  ms1000   = 1000,
+  ms1250   = 1250,
+  ms1500   = 1500,
+  ms1750   = 1750,
+  ms2000   = 2000,
+  ms2250   = 2250,
+  ms2500   = 2500,
+  ms2750   = 2750,
+  ms3000   = 3000,
+  infinity = -1
 };
 
 // Taken from PDCP-Config (TS 38.331 version 15.2.1)
@@ -122,7 +123,7 @@ enum class pdcp_discard_timer_t {
   ms500    = 500,
   ms750    = 750,
   ms1500   = 1500,
-  infinity = 0
+  infinity = -1
 };
 
 class pdcp_config_t
@@ -165,6 +166,17 @@ public:
 
   // TODO: Support the following configurations
   // bool do_rohc;
+
+  bool operator==(const pdcp_config_t& other) const
+  {
+    return bearer_id == other.bearer_id and rb_type == other.rb_type and tx_direction == other.tx_direction and
+           rx_direction == other.rx_direction and sn_len == other.sn_len and hdr_len_bytes == other.hdr_len_bytes and
+           t_reordering == other.t_reordering and discard_timer == other.discard_timer and rat == other.rat and
+           status_report_required == other.status_report_required;
+  }
+  bool operator!=(const pdcp_config_t& other) const { return not(*this == other); }
+
+  std::string get_rb_name() const { return (rb_type == PDCP_RB_IS_DRB ? "DRB" : "SRB") + std::to_string(bearer_id); }
 };
 
 // Specifies in which direction security (integrity and ciphering) are enabled for PDCP

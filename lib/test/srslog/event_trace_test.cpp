@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -34,7 +34,7 @@ namespace {
 class backend_spy : public detail::log_backend
 {
 public:
-  void start() override {}
+  void start(srslog::backend_priority priority) override {}
 
   bool push(detail::log_entry&& entry) override
   {

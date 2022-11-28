@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -23,11 +23,12 @@
 #define SRSRAN_TEST_COMMON_H
 
 #include "srsran/config.h"
+#include "srsran/support/srsran_test.h"
 
 #ifdef __cplusplus
 
+#include "srsran/common/buffer_pool.h"
 #include "srsran/common/crash_handler.h"
-#include "srsran/common/srsran_assert.h"
 #include "srsran/common/standard_streams.h"
 #include "srsran/srslog/srslog.h"
 #include <atomic>
@@ -145,30 +146,61 @@ inline void test_init(int argc, char** argv)
   srsran_debug_handle_crash(argc, argv);
 
   srslog::fetch_basic_logger("ALL").set_level(srslog::basic_levels::info);
+  srslog::fetch_basic_logger("TEST").set_level(srslog::basic_levels::info);
 
   // Start the log backend.
   srslog::init();
 }
+
+inline void copy_msg_to_buffer(unique_byte_buffer_t& pdu, const_byte_span msg)
+{
+  pdu = srsran::make_byte_buffer();
+  if (pdu == nullptr) {
+    srslog::fetch_basic_logger("ALL").error("Couldn't allocate PDU in %s().", __FUNCTION__);
+    return;
+  }
+  memcpy(pdu->msg, msg.data(), msg.size());
+  pdu->N_bytes = msg.size();
+}
+
+/**
+ * Delimits beginning/ending of a test with the following console output:
+ * ============= [Test <Name of the Test>] ===============
+ * <test log>
+ * =======================================================
+ */
+class test_delimit_logger
+{
+  const size_t delimiter_length = 128;
+
+public:
+  template <typename... Args>
+  explicit test_delimit_logger(const char* test_name_fmt, Args&&... args)
+  {
+    test_name               = fmt::format(test_name_fmt, std::forward<Args>(args)...);
+    std::string name_str    = fmt::format("[ Test \"{}\" ]", test_name);
+    double      nof_repeats = (delimiter_length - name_str.size()) / 2.0;
+    fmt::print("{0:=>{1}}{2}{0:=>{3}}\n", "", (int)floor(nof_repeats), name_str, (int)ceil(nof_repeats));
+  }
+  test_delimit_logger(const test_delimit_logger&) = delete;
+  test_delimit_logger(test_delimit_logger&&)      = delete;
+  test_delimit_logger& operator=(const test_delimit_logger&) = delete;
+  test_delimit_logger& operator=(test_delimit_logger&&) = delete;
+  ~test_delimit_logger()
+  {
+    srslog::flush();
+    fmt::print("{:=>{}}\n", "", delimiter_length);
+  }
+
+private:
+  std::string test_name;
+};
 
 } // namespace srsran
 
 #define CONDERROR(cond, fmt, ...) srsran_assert(not(cond), fmt, ##__VA_ARGS__)
 
 #define TESTERROR(fmt, ...) CONDERROR(true, fmt, ##__VA_ARGS__)
-
-#define TESTASSERT(cond) srsran_assert((cond), "Fail at \"%s\"", (#cond))
-
-#else // if C
-
-#include <stdio.h>
-
-#define TESTASSERT(cond)                                                                                               \
-  do {                                                                                                                 \
-    if (!(cond)) {                                                                                                     \
-      printf("[%s][Line %d] Fail at \"%s\"\n", __FUNCTION__, __LINE__, (#cond));                                       \
-      return -1;                                                                                                       \
-    }                                                                                                                  \
-  } while (0)
 
 #endif // __cplusplus
 

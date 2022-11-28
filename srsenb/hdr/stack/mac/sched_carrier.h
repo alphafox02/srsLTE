@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -24,6 +24,7 @@
 
 #include "sched.h"
 #include "schedulers/sched_base.h"
+#include "srsran/adt/pool/cached_alloc.h"
 #include "srsran/srslog/srslog.h"
 
 namespace srsenb {
@@ -34,16 +35,17 @@ class ra_sched;
 class sched::carrier_sched
 {
 public:
-  explicit carrier_sched(rrc_interface_mac*                              rrc_,
-                         std::map<uint16_t, std::unique_ptr<sched_ue> >* ue_db_,
-                         uint32_t                                        enb_cc_idx_,
-                         sched_result_ringbuffer*                        sched_results_);
+  explicit carrier_sched(rrc_interface_mac*       rrc_,
+                         sched_ue_list*           ue_db_,
+                         uint32_t                 enb_cc_idx_,
+                         sched_result_ringbuffer* sched_results_);
   ~carrier_sched();
   void                   reset();
   void                   carrier_cfg(const sched_cell_params_t& sched_params_);
   void                   set_dl_tti_mask(uint8_t* tti_mask, uint32_t nof_sfs);
   const cc_sched_result& generate_tti_result(srsran::tti_point tti_rx);
   int                    dl_rach_info(dl_sched_rar_info_t rar_info);
+  int                    pdcch_order_info(dl_sched_po_info_t pdcch_order_info);
 
   // getters
   const ra_sched* get_ra_sched() const { return ra_sched_ptr.get(); }
@@ -57,13 +59,15 @@ private:
   int alloc_ul_users(sf_sched* tti_sched);
   //! Get sf_sched for a given TTI
   sf_sched* get_sf_sched(srsran::tti_point tti_rx);
+  //! Schedule PDCCH orders
+  void pdcch_order_sched(sf_sched* tti_sched);
 
   // args
-  const sched_cell_params_t*                      cc_cfg = nullptr;
-  srslog::basic_logger&                           logger;
-  rrc_interface_mac*                              rrc   = nullptr;
-  std::map<uint16_t, std::unique_ptr<sched_ue> >* ue_db = nullptr;
-  const uint32_t                                  enb_cc_idx;
+  const sched_cell_params_t* cc_cfg = nullptr;
+  srslog::basic_logger&      logger;
+  rrc_interface_mac*         rrc   = nullptr;
+  sched_ue_list*             ue_db = nullptr;
+  const uint32_t             enb_cc_idx;
 
   // Subframe scheduling logic
   srsran::circular_array<sf_sched, TTIMOD_SZ> sf_scheds;
@@ -76,6 +80,11 @@ private:
   std::unique_ptr<bc_sched>   bc_sched_ptr;
   std::unique_ptr<ra_sched>   ra_sched_ptr;
   std::unique_ptr<sched_base> sched_algo;
+
+  // pending pdcch orders
+  std::vector<dl_sched_po_info_t> pending_pdcch_orders;
+
+  uint32_t po_aggr_level = 2;
 };
 
 //! Broadcast (SIB + paging) scheduler
@@ -131,9 +140,9 @@ private:
   const sched_cell_params_t* cc_cfg = nullptr;
   sched_ue_list*             ue_db  = nullptr;
 
-  std::deque<pending_rar_t> pending_rars;
-  uint32_t                  rar_aggr_level   = 2;
-  static const uint32_t     PRACH_RAR_OFFSET = 3; // TS 36.321 Sec. 5.1.4
+  srsran::deque<pending_rar_t> pending_rars;
+  uint32_t                     rar_aggr_level   = 2;
+  static const uint32_t        PRACH_RAR_OFFSET = 3; // TS 36.321 Sec. 5.1.4
 };
 
 } // namespace srsenb

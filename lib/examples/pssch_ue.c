@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -188,7 +188,7 @@ void parse_args(prog_args_t* args, int argc, char** argv)
         args->nof_rx_antennas = (int32_t)strtol(argv[optind], NULL, 10);
         break;
       case 'v':
-        srsran_verbose++;
+        increase_srsran_verbose_level();
         break;
       case 'w':
         args->disable_plots = true;
@@ -232,7 +232,7 @@ int main(int argc, char** argv)
 
   parse_args(&prog_args, argc, argv);
 
-  FILE* pcap_file = LTE_PCAP_Open(MAC_LTE_DLT, PCAP_FILENAME);
+  FILE* pcap_file = DLT_PCAP_Open(MAC_LTE_DLT, PCAP_FILENAME);
 
   srsran_use_standard_symbol_size(prog_args.use_standard_lte_rates);
 
@@ -303,7 +303,7 @@ int main(int argc, char** argv)
   cf_t*    equalized_sf_buffer = srsran_vec_malloc(sizeof(cf_t) * sf_n_re);
 
   // RX
-  srsran_ofdm_t     fft[SRSRAN_MAX_PORTS];
+  srsran_ofdm_t     fft[SRSRAN_MAX_PORTS] = {};
   srsran_ofdm_cfg_t ofdm_cfg = {};
   ofdm_cfg.nof_prb           = cell_sl.nof_prb;
   ofdm_cfg.cp                = SRSRAN_CP_NORM;
@@ -341,7 +341,7 @@ int main(int argc, char** argv)
   // PSCCH Channel estimation
   srsran_chest_sl_cfg_t pscch_chest_sl_cfg = {};
   srsran_chest_sl_t     pscch_chest        = {};
-  if (srsran_chest_sl_init(&pscch_chest, SRSRAN_SIDELINK_PSCCH, cell_sl, sl_comm_resource_pool) != SRSRAN_SUCCESS) {
+  if (srsran_chest_sl_init(&pscch_chest, SRSRAN_SIDELINK_PSCCH, cell_sl, &sl_comm_resource_pool) != SRSRAN_SUCCESS) {
     ERROR("Error in chest PSCCH init");
     return SRSRAN_ERROR;
   }
@@ -353,7 +353,7 @@ int main(int argc, char** argv)
 
   srsran_chest_sl_cfg_t pssch_chest_sl_cfg = {};
   srsran_chest_sl_t     pssch_chest        = {};
-  if (srsran_chest_sl_init(&pssch_chest, SRSRAN_SIDELINK_PSSCH, cell_sl, sl_comm_resource_pool) != SRSRAN_SUCCESS) {
+  if (srsran_chest_sl_init(&pssch_chest, SRSRAN_SIDELINK_PSSCH, cell_sl, &sl_comm_resource_pool) != SRSRAN_SUCCESS) {
     ERROR("Error in chest PSSCH init");
     return SRSRAN_ERROR;
   }
@@ -546,7 +546,7 @@ clean_exit:
 
   if (pcap_file != NULL) {
     printf("Saving PCAP file to %s\n", PCAP_FILENAME);
-    LTE_PCAP_Close(pcap_file);
+    DLT_PCAP_Close(pcap_file);
   }
 
 #ifdef ENABLE_GUI

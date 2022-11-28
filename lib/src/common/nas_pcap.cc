@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -22,19 +22,42 @@
 #include "srsran/common/nas_pcap.h"
 #include "srsran/common/pcap.h"
 #include "srsran/srsran.h"
+#include "srsran/support/emergency_handlers.h"
 #include <stdint.h>
 
 namespace srsran {
+
+/// Try to flush the contents of the pcap class before the application is killed.
+static void emergency_cleanup_handler(void* data)
+{
+  reinterpret_cast<nas_pcap*>(data)->close();
+}
+
+nas_pcap::nas_pcap()
+{
+  emergency_handler_id = add_emergency_cleanup_handler(emergency_cleanup_handler, this);
+}
+
+nas_pcap::~nas_pcap()
+{
+  if (emergency_handler_id > 0) {
+    remove_emergency_cleanup_handler(emergency_handler_id);
+  }
+}
 
 void nas_pcap::enable()
 {
   enable_write = true;
 }
 
-uint32_t nas_pcap::open(std::string filename_, uint32_t ue_id_)
+uint32_t nas_pcap::open(std::string filename_, uint32_t ue_id_, srsran_rat_t rat_type)
 {
-  filename  = filename_;
-  pcap_file = LTE_PCAP_Open(NAS_LTE_DLT, filename.c_str());
+  filename = filename_;
+  if (rat_type == srsran_rat_t::nr) {
+    pcap_file = DLT_PCAP_Open(NAS_5G_DLT, filename.c_str());
+  } else {
+    pcap_file = DLT_PCAP_Open(NAS_LTE_DLT, filename.c_str());
+  }
   if (pcap_file == nullptr) {
     return SRSRAN_ERROR;
   }
@@ -46,7 +69,8 @@ uint32_t nas_pcap::open(std::string filename_, uint32_t ue_id_)
 void nas_pcap::close()
 {
   fprintf(stdout, "Saving NAS PCAP file (DLT=%d) to %s \n", NAS_LTE_DLT, filename.c_str());
-  LTE_PCAP_Close(pcap_file);
+  DLT_PCAP_Close(pcap_file);
+  pcap_file = nullptr;
 }
 
 void nas_pcap::write_nas(uint8_t* pdu, uint32_t pdu_len_bytes)

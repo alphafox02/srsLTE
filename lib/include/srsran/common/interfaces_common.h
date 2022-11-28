@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -29,19 +29,20 @@
 
 namespace srsran {
 
-typedef struct {
+struct phy_log_args_t {
   std::string phy_level     = "none";
   std::string phy_lib_level = "none";
+  std::string id_preamble   = "";
   int         phy_hex_limit = -1;
-} phy_log_args_t;
+};
 
-typedef struct {
+struct rf_args_band_t {
   float min;
   float max;
-} rf_args_band_t;
+};
 
 // RF/radio args
-typedef struct {
+struct rf_args_t {
   std::string type;
   std::string log_level;
   double      srate_hz;
@@ -65,14 +66,8 @@ typedef struct {
   std::array<rf_args_band_t, SRSRAN_MAX_CARRIERS> ch_rx_bands;
   std::array<rf_args_band_t, SRSRAN_MAX_CARRIERS> ch_tx_bands;
 
-} rf_args_t;
-
-struct vnf_args_t {
-  std::string type;
-  std::string bind_addr;
-  uint16_t    bind_port;
-  std::string log_level;
-  int         log_hex_limit;
+  FILE** rx_files;  // Array of pre-opened FILE* for rx instead of a real device
+  FILE** tx_files;  // Array of pre-opened FILE* for tx instead of a real device
 };
 
 class srsran_gw_config_t
@@ -86,11 +81,9 @@ public:
 class read_pdu_interface
 {
 public:
-  virtual int read_pdu(uint32_t lcid, uint8_t* payload, uint32_t requested_bytes) = 0;
+  virtual uint32_t read_pdu(uint32_t lcid, uint8_t* payload, uint32_t requested_bytes) = 0;
 };
 
-class stack_interface_phy_nr
-{};
 
 } // namespace srsran
 

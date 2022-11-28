@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -24,33 +24,6 @@
 #include "srsran/common/string_helpers.h"
 
 namespace srsenb {
-
-const char* to_string(alloc_result result)
-{
-  switch (result) {
-    case alloc_result::success:
-      return "success";
-    case alloc_result::sch_collision:
-      return "Collision with existing SCH allocations";
-    case alloc_result::other_cause:
-      return "error";
-    case alloc_result::no_cch_space:
-      return "No space available in PUCCH or PDCCH";
-    case alloc_result::no_sch_space:
-      return "Requested number of PRBs not available";
-    case alloc_result::no_rnti_opportunity:
-      return "rnti cannot be allocated (e.g. already allocated, no data, meas gap collision, carrier inactive, etc.)";
-    case alloc_result::invalid_grant_params:
-      return "invalid grant arguments (e.g. invalid prb mask)";
-    case alloc_result::invalid_coderate:
-      return "Effective coderate exceeds threshold";
-    case alloc_result::no_grant_space:
-      return "Max number of allocations reached";
-    default:
-      break;
-  }
-  return "unknown error";
-}
 
 void sf_sched_result::new_tti(tti_point tti_rx_)
 {
@@ -114,10 +87,17 @@ void sf_grid_t::init(const sched_cell_params_t& cell_params_)
 
   // Compute reserved PRBs for CQI, SR and HARQ-ACK, and store it in a bitmask
   pucch_mask.resize(cc_cfg->nof_prb());
-  pucch_nrb                    = (cc_cfg->cfg.nrb_pucch > 0) ? (uint32_t)cc_cfg->cfg.nrb_pucch : 0;
-  srsran_pucch_cfg_t pucch_cfg = cell_params_.pucch_cfg_common;
-  pucch_cfg.n_pucch            = cc_cfg->nof_cce_table[SRSRAN_NOF_CFI - 1] - 1 + cc_cfg->cfg.n1pucch_an;
-  pucch_nrb                    = std::max(pucch_nrb, srsran_pucch_m(&pucch_cfg, cc_cfg->cfg.cell.cp) / 2 + 1);
+  pucch_nrb                     = (cc_cfg->cfg.nrb_pucch > 0) ? (uint32_t)cc_cfg->cfg.nrb_pucch : 0;
+  srsran_pucch_cfg_t pucch_cfg  = cell_params_.pucch_cfg_common;
+  uint32_t           harq_pucch = 0;
+  if (cc_cfg->sched_cfg->pucch_harq_max_rb > 0) {
+    harq_pucch = cc_cfg->sched_cfg->pucch_harq_max_rb;
+  } else {
+    pucch_cfg.n_pucch =
+        cc_cfg->nof_cce_table[cell_params_.sched_cfg->max_nof_ctrl_symbols - 1] - 1 + cc_cfg->cfg.n1pucch_an;
+    harq_pucch = srsran_pucch_m(&pucch_cfg, cc_cfg->cfg.cell.cp) / 2 + 1;
+  }
+  pucch_nrb = std::max(pucch_nrb, harq_pucch);
   if (pucch_nrb > 0) {
     pucch_mask.fill(0, pucch_nrb);
     pucch_mask.fill(cc_cfg->nof_prb() - pucch_nrb, cc_cfg->nof_prb());
@@ -135,7 +115,7 @@ void sf_grid_t::new_tti(tti_point tti_rx_)
   ul_mask |= pucch_mask;
 
   // Reserve PRBs for PRACH
-  if (srsran_prach_tti_opportunity_config_fdd(cc_cfg->cfg.prach_config, to_tx_ul(tti_rx).to_uint(), -1)) {
+  if (srsran_prach_in_window_config_fdd(cc_cfg->cfg.prach_config, to_tx_ul(tti_rx).to_uint(), -1)) {
     prbmask_t prach_mask{cc_cfg->nof_prb()};
     prach_mask.fill(cc_cfg->cfg.prach_freq_offset, cc_cfg->cfg.prach_freq_offset + 6);
     reserve_ul_prbs(prach_mask, false); // TODO: set to true once test sib.conf files are updated
@@ -188,7 +168,7 @@ alloc_result sf_grid_t::alloc_dl(uint32_t     aggr_idx,
 alloc_result sf_grid_t::alloc_dl_ctrl(uint32_t aggr_idx, rbg_interval rbg_range, alloc_type_t alloc_type)
 {
   if (alloc_type != alloc_type_t::DL_RAR and alloc_type != alloc_type_t::DL_BC and
-      alloc_type != alloc_type_t::DL_PCCH) {
+      alloc_type != alloc_type_t::DL_PCCH and alloc_type != alloc_type_t::DL_PDCCH_ORDER) {
     logger.error("SCHED: DL control allocations must be RAR/BC/PDCCH");
     return alloc_result::other_cause;
   }
@@ -345,6 +325,7 @@ void sf_sched::new_tti(tti_point tti_rx_, sf_sched_result* cc_results_)
   // reset internal state
   bc_allocs.clear();
   rar_allocs.clear();
+  po_allocs.clear();
   data_allocs.clear();
   ul_data_allocs.clear();
 
@@ -355,7 +336,7 @@ void sf_sched::new_tti(tti_point tti_rx_, sf_sched_result* cc_results_)
   // setup first prb to be used for msg3 alloc. Account for potential PRACH alloc
   last_msg3_prb            = tti_alloc.get_pucch_width();
   tti_point tti_msg3_alloc = to_tx_ul(tti_rx) + MSG3_DELAY_MS;
-  if (srsran_prach_tti_opportunity_config_fdd(cc_cfg->cfg.prach_config, tti_msg3_alloc.to_uint(), -1)) {
+  if (srsran_prach_in_window_config_fdd(cc_cfg->cfg.prach_config, tti_msg3_alloc.to_uint(), -1)) {
     last_msg3_prb = std::max(last_msg3_prb, cc_cfg->cfg.prach_freq_offset + 6);
   }
 }
@@ -472,6 +453,40 @@ alloc_result sf_sched::alloc_rar(uint32_t aggr_lvl, const pending_rar_t& rar, rb
   return ret;
 }
 
+alloc_result
+sf_sched::alloc_pdcch_order(const sched_interface::dl_sched_po_info_t& po_cfg, uint32_t aggr_lvl, rbg_interval rbgs)
+{
+  if (po_allocs.full()) {
+    logger.warning("SCHED: Maximum number of PDCCH order allocations per TTI reached.");
+    return alloc_result::no_grant_space;
+  }
+
+  uint32_t buf_pdcch_order = 7; // TODO get actual size
+
+  // Allocate RBGs and PDCCH
+  alloc_result ret = tti_alloc.alloc_dl_ctrl(aggr_lvl, rbgs, alloc_type_t::DL_PDCCH_ORDER);
+  if (ret != alloc_result::success) {
+    return ret;
+  }
+
+  po_alloc_t po_alloc;
+  po_alloc.po_grant.crnti          = po_cfg.crnti;
+  po_alloc.po_grant.preamble_idx   = po_cfg.preamble_idx;
+  po_alloc.po_grant.prach_mask_idx = po_cfg.prach_mask_idx;
+  po_alloc.po_grant.tbs            = buf_pdcch_order;
+
+  // Generate DCI for PDCCH order message
+  generate_pdcch_order_dci(po_alloc.po_grant, get_tti_tx_dl(), *cc_cfg, tti_alloc.get_cfi());
+
+  // Allocation Successful
+  po_alloc.dci_idx   = tti_alloc.get_pdcch_grid().nof_allocs() - 1;
+  po_alloc.rbg_range = rbgs;
+  po_alloc.req_bytes = buf_pdcch_order;
+  po_allocs.push_back(po_alloc);
+
+  return alloc_result::success;
+}
+
 bool is_periodic_cqi_expected(const sched_interface::ue_cfg_t& ue_cfg, tti_point tti_tx_ul)
 {
   for (const sched_interface::ue_cfg_t::cc_cfg_t& cc : ue_cfg.supported_cc_list) {
@@ -504,21 +519,23 @@ alloc_result sf_sched::alloc_dl_user(sched_ue* user, const rbgmask_t& user_mask,
     return alloc_result::no_rnti_opportunity;
   }
 
-  // Check if allocation would cause segmentation
-  const dl_harq_proc& h = user->get_dl_harq(pid, cc_cfg->enb_cc_idx);
-  if (h.is_empty()) {
-    // It is newTx
-    rbg_interval r = user->get_required_dl_rbgs(cc_cfg->enb_cc_idx);
-    if (r.start() > user_mask.count()) {
-      logger.debug("SCHED: The number of RBGs allocated to rnti=0x%x will force segmentation", user->get_rnti());
-      return alloc_result::invalid_grant_params;
-    }
-  }
-
   srsran_dci_format_t dci_format = user->get_dci_format();
   if (dci_format == SRSRAN_DCI_FORMAT1A and not is_contiguous(user_mask)) {
     logger.warning("SCHED: Can't use distributed RBGs for DCI format 1A");
     return alloc_result::invalid_grant_params;
+  }
+
+  // Check if allocation is too small to fit headers, BSR or would cause SRB0 segmentation
+  const dl_harq_proc& h = user->get_dl_harq(pid, cc_cfg->enb_cc_idx);
+  if (h.is_empty()) {
+    // It is newTx
+    srsran::interval<uint32_t> req_bytes = user->get_requested_dl_bytes(get_enb_cc_idx());
+    tbs_info                   tb        = compute_mcs_and_tbs_lower_bound(*cc, get_tti_tx_dl(), user_mask, dci_format);
+    if ((int)req_bytes.start() > tb.tbs_bytes) {
+      logger.debug("SCHED: The number of RBGs allocated to rnti=0x%x is too small to fit essential control information",
+                   user->get_rnti());
+      return alloc_result::invalid_grant_params;
+    }
   }
 
   bool has_pusch_grant = is_ul_alloc(user->get_rnti()) or cc_results->is_ul_alloc(user->get_rnti());
@@ -586,7 +603,7 @@ sf_sched::alloc_ul(sched_ue* user, prb_interval alloc, ul_alloc_t::type_t alloc_
   // Check if there is no collision with measGap
   bool needs_pdcch = alloc_type == ul_alloc_t::ADAPT_RETX or (alloc_type == ul_alloc_t::NEWTX and not is_msg3);
   if (not user->pusch_enabled(get_tti_rx(), cc_cfg->enb_cc_idx, needs_pdcch)) {
-    logger.debug("SCHED: PDCCH would collide with rnti=0x%x Measurement Gap", user->get_rnti());
+    logger.debug("SCHED: PDCCH/PUSCH would collide with rnti=0x%x Measurement Gap", user->get_rnti());
     return alloc_result::no_rnti_opportunity;
   }
 
@@ -630,12 +647,6 @@ alloc_result sf_sched::alloc_phich(sched_ue* user)
 {
   using phich_t = sched_interface::ul_sched_phich_t;
 
-  auto* ul_sf_result = &cc_results->get_cc(cc_cfg->enb_cc_idx)->ul_sched_result;
-  if (ul_sf_result->phich.full()) {
-    logger.warning("SCHED: Maximum number of PHICH allocations has been reached");
-    return alloc_result::no_grant_space;
-  }
-
   auto p = user->get_active_cell_index(cc_cfg->enb_cc_idx);
   if (not p.first) {
     // user does not support this carrier
@@ -643,15 +654,45 @@ alloc_result sf_sched::alloc_phich(sched_ue* user)
   }
 
   ul_harq_proc* h = user->get_ul_harq(get_tti_tx_ul(), cc_cfg->enb_cc_idx);
+  if (not h->has_pending_phich()) {
+    // No PHICH pending
+    return alloc_result::no_rnti_opportunity;
+  }
+
+  auto* ul_sf_result = &cc_results->get_cc(cc_cfg->enb_cc_idx)->ul_sched_result;
+  if (ul_sf_result->phich.full()) {
+    logger.warning(
+        "SCHED: UL skipped retx rnti=0x%x, pid=%d. Cause: No PHICH space left", user->get_rnti(), h->get_id());
+    h->pop_pending_phich();
+    return alloc_result::no_grant_space;
+  }
+
+  if (not user->phich_enabled(get_tti_rx(), cc_cfg->enb_cc_idx)) {
+    // PHICH falls in measGap. PHICH hi=1 is assumed by UE. In case of NACK, the HARQ is going to be resumed later on.
+    bool ack = h->pop_pending_phich(); // empty pending PHICH
+    if (h->is_empty(0)) {
+      logger.debug("SCHED: PHICH hi=%d not sent for rnti=0x%x, cc=%d, pid=%d. Cause: PHICH-measGap collision",
+                   (int)ack,
+                   user->get_rnti(),
+                   get_enb_cc_idx(),
+                   h->get_id());
+    } else {
+      // Note: Given that the UE assumes PHICH hi=1, it is not expecting PUSCH grants for tti_tx_ul. Requesting PDCCH
+      //       for the UL Harq has the effect of forbidding PUSCH grants, since phich_tti == pdcch_tti.
+      h->request_pdcch();
+      logger.info("SCHED: UL skipped retx rnti=0x%x, cc=%d, pid=%d. Cause: PHICH-measGap collision",
+                  user->get_rnti(),
+                  get_enb_cc_idx(),
+                  h->get_id());
+    }
+    return alloc_result::no_cch_space;
+  }
 
   /* Indicate PHICH acknowledgment if needed */
-  if (h->has_pending_phich()) {
-    ul_sf_result->phich.emplace_back();
-    ul_sf_result->phich.back().rnti  = user->get_rnti();
-    ul_sf_result->phich.back().phich = h->pop_pending_phich() ? phich_t::ACK : phich_t::NACK;
-    return alloc_result::success;
-  }
-  return alloc_result::no_rnti_opportunity;
+  ul_sf_result->phich.emplace_back();
+  ul_sf_result->phich.back().rnti  = user->get_rnti();
+  ul_sf_result->phich.back().phich = h->pop_pending_phich() ? phich_t::ACK : phich_t::NACK;
+  return alloc_result::success;
 }
 
 void sf_sched::set_dl_data_sched_result(const sf_cch_allocator::alloc_result_t& dci_result,
@@ -695,8 +736,8 @@ void sf_sched::set_dl_data_sched_result(const sf_cch_allocator::alloc_result_t& 
     // Print Resulting DL Allocation
     fmt::memory_buffer str_buffer;
     fmt::format_to(str_buffer,
-                   "SCHED: DL {} rnti=0x{:x}, cc={}, pid={}, mask=0x{:x}, dci=({}, {}), n_rtx={}, tbs={}, "
-                   "buffer={}/{}, tti_tx_dl={}",
+                   "SCHED: DL {} rnti=0x{:x}, cc={}, pid={}, mask=0x{:x}, dci=({}, {}), n_rtx={}, cfi={}, "
+                   "tbs={}, buffer={}/{}, tti_tx_dl={}",
                    is_newtx ? "tx" : "retx",
                    user->get_rnti(),
                    cc_cfg->enb_cc_idx,
@@ -705,6 +746,7 @@ void sf_sched::set_dl_data_sched_result(const sf_cch_allocator::alloc_result_t& 
                    data->dci.location.L,
                    data->dci.location.ncce,
                    dl_harq.nof_retx(0) + dl_harq.nof_retx(1),
+                   tti_alloc.get_cfi(),
                    tbs,
                    data_before,
                    user->get_pending_dl_bytes(cc_cfg->enb_cc_idx),
@@ -824,13 +866,13 @@ void sf_sched::set_ul_sched_result(const sf_cch_allocator::alloc_result_t& dci_r
     sched_interface::ul_sched_data_t& pusch = ul_result->pusch.back();
     uint32_t total_data_before              = user->get_pending_ul_data_total(get_tti_tx_ul(), cc_cfg->enb_cc_idx);
     int      tbs                            = user->generate_format0(&pusch,
-                                     get_tti_tx_ul(),
-                                     cc_cfg->enb_cc_idx,
-                                     ul_alloc.alloc,
-                                     ul_alloc.needs_pdcch(),
-                                     cce_range,
-                                     ul_alloc.msg3_mcs,
-                                     uci_type);
+                                                                     get_tti_tx_ul(),
+                                                                     cc_cfg->enb_cc_idx,
+                                                                     ul_alloc.alloc,
+                                                                     ul_alloc.needs_pdcch(),
+                                                                     cce_range,
+                                                                     ul_alloc.msg3_mcs,
+                                                                     uci_type);
 
     ul_harq_proc* h                 = user->get_ul_harq(get_tti_tx_ul(), cc_cfg->enb_cc_idx);
     uint32_t      new_pending_bytes = user->get_pending_ul_new_data(get_tti_tx_ul(), cc_cfg->enb_cc_idx);
@@ -857,7 +899,8 @@ void sf_sched::set_ul_sched_result(const sf_cch_allocator::alloc_result_t& dci_r
     if (logger.info.enabled()) {
       fmt::memory_buffer str_buffer;
       fmt::format_to(str_buffer,
-                     "SCHED: {} {} rnti=0x{:x}, cc={}, pid={}, dci=({},{}), prb={}, n_rtx={}, tbs={}, bsr={} ({}-{})",
+                     "SCHED: {} {} rnti=0x{:x}, cc={}, pid={}, dci=({},{}), prb={}, n_rtx={}, cfi={}, tbs={}, bsr={} "
+                     "({}-{}), tti_tx_ul={}",
                      ul_alloc.is_msg3 ? "Msg3" : "UL",
                      ul_alloc.is_retx() ? "retx" : "tx",
                      user->get_rnti(),
@@ -867,10 +910,12 @@ void sf_sched::set_ul_sched_result(const sf_cch_allocator::alloc_result_t& dci_r
                      pusch.dci.location.ncce,
                      ul_alloc.alloc,
                      h->nof_retx(0),
+                     tti_alloc.get_cfi(),
                      tbs,
                      new_pending_bytes,
                      total_data_before,
-                     old_pending_bytes);
+                     old_pending_bytes,
+                     get_tti_tx_ul().to_uint());
       logger.info("%s", srsran::to_c_str(str_buffer));
     }
 
@@ -899,15 +944,23 @@ void sf_sched::generate_sched_results(sched_ue_list& ue_db)
   /* Resume UL HARQs with pending retxs that did not get allocated */
   using phich_t    = sched_interface::ul_sched_phich_t;
   auto& phich_list = cc_result->ul_sched_result.phich;
-  for (uint32_t i = 0; i < cc_result->ul_sched_result.phich.size(); ++i) {
-    auto& phich = phich_list[i];
-    if (phich.phich == phich_t::NACK) {
-      auto&         ue = *ue_db[phich.rnti];
-      ul_harq_proc* h  = ue.get_ul_harq(get_tti_tx_ul(), cc_cfg->enb_cc_idx);
-      if (not is_ul_alloc(ue.get_rnti()) and h != nullptr and not h->is_empty()) {
-        // There was a missed UL harq retx. Halt+Resume the HARQ
-        phich.phich = phich_t::ACK;
-        logger.debug("SCHED: rnti=0x%x UL harq pid=%d is being resumed", ue.get_rnti(), h->get_id());
+  for (auto& ue_pair : ue_db) {
+    auto&         ue   = *ue_pair.second;
+    uint16_t      rnti = ue.get_rnti();
+    ul_harq_proc* h    = ue.get_ul_harq(get_tti_tx_ul(), cc_cfg->enb_cc_idx);
+    if (h != nullptr and not h->is_empty() and not is_ul_alloc(rnti)) {
+      // There was a missed UL harq retx. Halt+Resume the HARQ
+      h->retx_skipped();
+      auto     same_rnti = [rnti](const phich_t& p) { return p.rnti == rnti; };
+      phich_t* phich     = std::find_if(phich_list.begin(), phich_list.end(), same_rnti);
+      if (phich != phich_list.end()) {
+        srsran_assert(phich->phich == phich_t::NACK, "Expected hi=0 in case of active UL HARQ that was not retx");
+        logger.info("SCHED: UL skipped retx rnti=0x%x, pid=%d. Cause: %s",
+                    ue.get_rnti(),
+                    h->get_id(),
+                    ue.pusch_enabled(get_tti_rx(), cc_cfg->enb_cc_idx, false) ? "lack of PHY resources"
+                                                                              : "PUSCH-measGap collision");
+        phich->phich = phich_t::ACK;
       }
     }
   }
@@ -931,6 +984,12 @@ void sf_sched::generate_sched_results(sched_ue_list& ue_db)
     cc_result->dl_sched_result.rar.emplace_back(rar_alloc.rar_grant);
     cc_result->dl_sched_result.rar.back().dci.location = dci_result[rar_alloc.alloc_data.dci_idx]->dci_pos;
     log_rar_allocation(cc_result->dl_sched_result.rar.back(), rar_alloc.alloc_data.rbg_range);
+  }
+
+  for (const auto& po_alloc : po_allocs) {
+    cc_result->dl_sched_result.po.emplace_back(po_alloc.po_grant);
+    cc_result->dl_sched_result.po.back().dci.location = dci_result[po_alloc.dci_idx]->dci_pos;
+    log_po_allocation(cc_result->dl_sched_result.po.back(), po_alloc.rbg_range, *cc_cfg);
   }
 
   set_dl_data_sched_result(dci_result, &cc_result->dl_sched_result, ue_db);

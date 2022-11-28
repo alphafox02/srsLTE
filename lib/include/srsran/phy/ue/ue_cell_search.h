@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -98,6 +98,8 @@ SRSRAN_API int srsran_ue_cellsearch_scan(srsran_ue_cellsearch_t*       q,
                                          uint32_t*                     max_N_id_2);
 
 SRSRAN_API int srsran_ue_cellsearch_set_nof_valid_frames(srsran_ue_cellsearch_t* q, uint32_t nof_frames);
+
+SRSRAN_API void srsran_set_detect_cp(srsran_ue_cellsearch_t* q, bool enable);
 
 #endif // SRSRAN_UE_CELL_SEARCH_H
 

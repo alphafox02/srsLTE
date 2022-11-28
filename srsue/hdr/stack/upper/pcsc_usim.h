@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -53,7 +53,14 @@ public:
                                                  uint8_t* res,
                                                  int*     res_len,
                                                  uint8_t* k_asme);
-
+  // NAS interface
+  auth_result_t generate_authentication_response_5g(uint8_t*    rand,
+                                                    uint8_t*    autn_enb,
+                                                    const char* serving_network_name,
+                                                    uint8_t*    abba,
+                                                    uint32_t    abba_len,
+                                                    uint8_t*    res_star,
+                                                    uint8_t*    k_amf);
   // Helpers
   virtual std::string get_mnc_str(const uint8_t* imsi_vec, std::string mcc_str) final;
 

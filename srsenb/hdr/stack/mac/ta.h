@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -75,6 +75,8 @@ private:
     uint32_t ts_ms; ///< Time in which the measurement was taken in ms
     float    ta_us; ///< TA measurement in microseconds
   } ta_meas_t;
+
+  std::mutex mutex;
 
   uint32_t               meas_t_ms  = 0; ///< Time counter in milliseconds
   uint32_t               meas_count = 0; ///< Number of measures in the buffer
@@ -206,6 +208,7 @@ public:
    */
   void start()
   {
+    std::lock_guard<std::mutex> lock(mutex);
     // Transition to idle only if the current state is idle
     if (state == state_idle) {
       state = state_measure;
@@ -220,6 +223,7 @@ public:
    */
   uint32_t push_value(float ta_us)
   {
+    std::lock_guard<std::mutex> lock(mutex);
     // Put measurement if state is measurement
     if (state == state_measure) {
       // Set measurement
@@ -247,6 +251,7 @@ public:
    */
   uint32_t tick()
   {
+    std::lock_guard<std::mutex> lock(mutex);
     // Increase measurement timestamp counter
     meas_t_ms++;
 

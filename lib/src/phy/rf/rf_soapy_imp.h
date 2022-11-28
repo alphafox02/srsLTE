@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -23,10 +23,13 @@
 #define SRSRAN_RF_SOAPY_IMP_H_
 
 #include "srsran/config.h"
+#include "srsran/phy/common/phy_common.h"
 #include "srsran/phy/rf/rf.h"
 #include <stdbool.h>
 #include <stdint.h>
 #define DEVNAME_SOAPY "soapy"
+
+extern rf_dev_t srsran_rf_dev_soapy;
 
 SRSRAN_API int rf_soapy_open(char* args, void** handler);
 
@@ -75,8 +78,12 @@ SRSRAN_API double rf_soapy_set_rx_freq(void* h, uint32_t ch, double freq);
 SRSRAN_API int
 rf_soapy_recv_with_time(void* h, void* data, uint32_t nsamples, bool blocking, time_t* secs, double* frac_secs);
 
-SRSRAN_API int
-rf_soapy_recv_with_time_multi(void* h, void** data, uint32_t nsamples, bool blocking, time_t* secs, double* frac_secs);
+SRSRAN_API int rf_soapy_recv_with_time_multi(void*    h,
+                                             void*    data[SRSRAN_MAX_PORTS],
+                                             uint32_t nsamples,
+                                             bool     blocking,
+                                             time_t*  secs,
+                                             double*  frac_secs);
 
 SRSRAN_API double rf_soapy_set_tx_srate(void* h, double freq);
 

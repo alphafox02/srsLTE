@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -33,21 +33,27 @@ sched_time_pf::sched_time_pf(const sched_cell_params_t& cell_params_, const sche
     fairness_coeff = std::stof(sched_args.sched_policy_args);
   }
 
-  std::vector<ue_ctxt *> dl_storage;
+  std::vector<ue_ctxt*> dl_storage;
   dl_storage.reserve(SRSENB_MAX_UES);
   dl_queue = ue_dl_queue_t(ue_dl_prio_compare{}, std::move(dl_storage));
 
-  std::vector<ue_ctxt *> ul_storage;
+  std::vector<ue_ctxt*> ul_storage;
   ul_storage.reserve(SRSENB_MAX_UES);
   ul_queue = ue_ul_queue_t(ue_ul_prio_compare{}, std::move(ul_storage));
 }
 
 void sched_time_pf::new_tti(sched_ue_list& ue_db, sf_sched* tti_sched)
 {
+  while (not dl_queue.empty()) {
+    dl_queue.pop();
+  }
+  while (not ul_queue.empty()) {
+    ul_queue.pop();
+  }
   current_tti_rx = tti_point{tti_sched->get_tti_rx()};
   // remove deleted users from history
   for (auto it = ue_history_db.begin(); it != ue_history_db.end();) {
-    if (not ue_db.count(it->first)) {
+    if (not ue_db.contains(it->first)) {
       it = ue_history_db.erase(it);
     } else {
       ++it;

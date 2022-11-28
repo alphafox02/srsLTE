@@ -1,5 +1,5 @@
 #
-# Copyright 2013-2021 Software Radio Systems Limited
+# Copyright 2013-2022 Software Radio Systems Limited
 #
 # This file is part of srsRAN
 #
@@ -23,6 +23,9 @@ add_subdirectory(common)
 add_subdirectory(mac)
 add_subdirectory(phy)
 add_subdirectory(radio)
+add_subdirectory(rlc)
+add_subdirectory(pdcp)
+add_subdirectory(gtpu)
 add_subdirectory(srslog)
+add_subdirectory(support)
 add_subdirectory(system)
-add_subdirectory(upper)

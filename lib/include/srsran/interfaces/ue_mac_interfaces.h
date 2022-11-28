@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -45,6 +45,9 @@ public:
     uint32_t pid;
     uint16_t rnti;
     bool     is_sps_release;
+    bool     is_pdcch_order;
+    uint32_t preamble_idx;
+    uint32_t prach_mask_idx;
     uint32_t tti;
   } mac_grant_dl_t;
 
@@ -100,30 +103,13 @@ public:
   virtual void bch_decoded_ok(uint32_t cc_idx, uint8_t* payload, uint32_t len) = 0;
 
   /* Indicate successful decoding of MCH TB through PMCH */
-  virtual void mch_decoded(uint32_t len, bool crc) = 0;
-
-  /* Obtain action for a new MCH subframe. */
-  virtual void new_mch_dl(const srsran_pdsch_grant_t& phy_grant, tb_action_dl_t* action) = 0;
+  virtual void mch_decoded(uint32_t len, bool crc, uint8_t* payload) = 0;
 
   /* Communicate the number of mbsfn services available  */
   virtual void set_mbsfn_config(uint32_t nof_mbsfn_services) = 0;
 };
 
-class mac_interface_rrc_common
-{
-public:
-  // Class to handle UE specific RNTIs between RRC and MAC
-  typedef struct {
-    uint16_t crnti;
-    uint16_t rar_rnti;
-    uint16_t temp_rnti;
-    uint16_t tpc_rnti;
-    uint16_t sps_rnti;
-    uint64_t contention_id;
-  } ue_rnti_t;
-};
-
-class mac_interface_rrc : public mac_interface_rrc_common
+class mac_interface_rrc
 {
 public:
   /* Instructs the MAC to start receiving BCCH */
@@ -147,9 +133,9 @@ public:
 
   virtual void set_rach_ded_cfg(uint32_t preamble_index, uint32_t prach_mask) = 0;
 
-  virtual void get_rntis(ue_rnti_t* rntis)                      = 0;
-  virtual void set_contention_id(uint64_t uecri)                = 0;
-  virtual void set_ho_rnti(uint16_t crnti, uint16_t target_pci) = 0;
+  virtual uint16_t get_crnti()                                      = 0;
+  virtual void     set_contention_id(uint64_t uecri)                = 0;
+  virtual void     set_ho_rnti(uint16_t crnti, uint16_t target_pci) = 0;
 
   virtual void reconfiguration(const uint32_t& cc_idx, const bool& enable) = 0;
   virtual void reset()                                                     = 0;

@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -18,6 +18,8 @@
  * and at http://www.gnu.org/licenses/.
  *
  */
+
+#include <iomanip>
 
 #include "srsran/common/threads.h"
 #include "srsran/srsran.h"
@@ -86,11 +88,12 @@ FILE* f;
 
 void cc_worker::init(phy_common* phy_, uint32_t cc_idx_)
 {
-  phy                   = phy_;
-  cc_idx                = cc_idx_;
-  srsran_cell_t cell    = phy_->get_cell(cc_idx);
-  uint32_t      nof_prb = phy_->get_nof_prb(cc_idx);
-  uint32_t      sf_len  = SRSRAN_SF_LEN_PRB(nof_prb);
+  phy                         = phy_;
+  cc_idx                      = cc_idx_;
+  srsran_cell_t    cell       = phy_->get_cell(cc_idx);
+  uint32_t         nof_prb    = phy_->get_nof_prb(cc_idx);
+  uint32_t         sf_len     = SRSRAN_SF_LEN_PRB(nof_prb);
+  srsran_cfr_cfg_t cfr_config = phy_->get_cfr_config();
 
   // Init cell here
   for (uint32_t p = 0; p < phy->get_nof_ports(cc_idx); p++) {
@@ -113,6 +116,10 @@ void cc_worker::init(phy_common* phy_, uint32_t cc_idx_)
   }
   if (srsran_enb_dl_set_cell(&enb_dl, cell)) {
     ERROR("Error initiating ENB DL (cc=%d)", cc_idx);
+    return;
+  }
+  if (srsran_enb_dl_set_cfr(&enb_dl, &cfr_config) < SRSRAN_SUCCESS) {
+    ERROR("Error setting the CFR");
     return;
   }
   if (srsran_enb_ul_init(&enb_ul, signal_buffer_rx[0], nof_prb)) {
@@ -196,8 +203,6 @@ void cc_worker::rem_rnti(uint16_t rnti)
   if (ue_db.count(rnti)) {
     delete ue_db[rnti];
     ue_db.erase(rnti);
-  } else {
-    Error("Removing user: rnti=0x%x does not exist\n", rnti);
   }
 }
 
@@ -262,9 +267,23 @@ void cc_worker::work_dl(const srsran_dl_sf_cfg_t&            dl_sf_cfg,
       srsran_vec_sc_prod_cfc(signal_buffer_tx[i], scale, signal_buffer_tx[i], sf_len);
     }
   }
+
+  // Measure PAPR if flag was triggered
+  bool cell_meas_flag = phy->get_cell_measure_trigger(cc_idx);
+  if (cell_meas_flag) {
+    uint32_t sf_len = SRSRAN_SF_LEN_PRB(enb_dl.cell.nof_prb);
+    for (uint32_t i = 0; i < enb_dl.cell.nof_ports; i++) {
+      // PAPR measure
+      float papr_db = 10.0f * log10(srsran_vec_papr_c(signal_buffer_tx[i], sf_len));
+      std::cout << "Cell #" << cc_idx << " port #" << i << " PAPR = " << std::setprecision(4) << papr_db << " dB "
+                << std::endl;
+    }
+    // clear measurement flag on cell
+    phy->clear_cell_measure_trigger(cc_idx);
+  }
 }
 
-void cc_worker::decode_pusch_rnti(stack_interface_phy_lte::ul_sched_grant_t& ul_grant,
+bool cc_worker::decode_pusch_rnti(stack_interface_phy_lte::ul_sched_grant_t& ul_grant,
                                   srsran_ul_cfg_t&                           ul_cfg,
                                   srsran_pusch_res_t&                        pusch_res)
 {
@@ -272,18 +291,19 @@ void cc_worker::decode_pusch_rnti(stack_interface_phy_lte::ul_sched_grant_t& ul_
 
   // Invalid RNTI
   if (rnti == SRSRAN_INVALID_RNTI) {
-    return;
+    return false;
   }
 
   // RNTI does not exist
   if (ue_db.count(rnti) == 0) {
-    return;
+    return false;
   }
 
   // Get UE configuration
   if (phy->ue_db.get_ul_config(rnti, cc_idx, ul_cfg) < SRSRAN_SUCCESS) {
-    Error("Error retrieving UL configuration for RNTI %x and CC %d", rnti, cc_idx);
-    return;
+    // It could happen that the UL configuration is missing due to intra-enb HO which is not an error
+    Info("Failed retrieving UL configuration for cc=%d rnti=0x%x", cc_idx, rnti);
+    return false;
   }
 
   // Fill UCI configuration
@@ -294,7 +314,7 @@ void cc_worker::decode_pusch_rnti(stack_interface_phy_lte::ul_sched_grant_t& ul_
   srsran_pusch_grant_t& grant = ul_cfg.pusch.grant;
   if (srsran_ra_ul_dci_to_grant(&enb_ul.cell, &ul_sf, &ul_cfg.hopping, &ul_grant.dci, &grant)) {
     Error("Computing PUSCH dci for RNTI %x", rnti);
-    return;
+    return false;
   }
 
   // Handle Format0 adaptive retx
@@ -303,7 +323,7 @@ void cc_worker::decode_pusch_rnti(stack_interface_phy_lte::ul_sched_grant_t& ul_
     int rv_idx = grant.tb.rv;
     if (phy->ue_db.get_last_ul_tb(rnti, cc_idx, ul_grant.pid, grant.tb) < SRSRAN_SUCCESS) {
       Error("Error retrieving last UL TB for RNTI %x, CC %d, PID %d", rnti, cc_idx, ul_grant.pid);
-      return;
+      return false;
     }
     grant.tb.rv = rv_idx;
     Info("Adaptive retx: rnti=0x%x, pid=%d, rv_idx=%d, mcs=%d, old_tbs=%d",
@@ -324,7 +344,7 @@ void cc_worker::decode_pusch_rnti(stack_interface_phy_lte::ul_sched_grant_t& ul_
   if (pusch_res.data) {
     if (srsran_enb_ul_get_pusch(&enb_ul, &ul_sf, &ul_cfg.pusch, &pusch_res)) {
       Error("Decoding PUSCH for RNTI %x", rnti);
-      return;
+      return false;
     }
   }
   // Save PHICH scheduling for this user. Each user can have just 1 PUSCH dci per TTI
@@ -352,8 +372,12 @@ void cc_worker::decode_pusch_rnti(stack_interface_phy_lte::ul_sched_grant_t& ul_
   // Save statistics only if data was provided
   if (ul_grant.data != nullptr) {
     // Save metrics stats
-    ue_db[rnti]->metrics_ul(ul_grant.dci.tb.mcs_idx, 0, enb_ul.chest_res.snr_db, pusch_res.avg_iterations_block);
+    ue_db[rnti]->metrics_ul(ul_grant.dci.tb.mcs_idx,
+                            enb_ul.chest_res.epre_dBfs - phy->params.rx_gain_offset,
+                            enb_ul.chest_res.snr_db,
+                            pusch_res.avg_iterations_block);
   }
+  return true;
 }
 
 void cc_worker::decode_pusch(stack_interface_phy_lte::ul_sched_grant_t* grants, uint32_t nof_pusch)
@@ -368,14 +392,17 @@ void cc_worker::decode_pusch(stack_interface_phy_lte::ul_sched_grant_t* grants, 
     srsran_ul_cfg_t    ul_cfg    = {};
 
     // Decodes PUSCH for the given grant
-    decode_pusch_rnti(ul_grant, ul_cfg, pusch_res);
+    if (!decode_pusch_rnti(ul_grant, ul_cfg, pusch_res)) {
+      return;
+    }
 
     // Notify MAC new received data and HARQ Indication value
     if (ul_grant.data != nullptr) {
       // Inform MAC about the CRC result
       phy->stack->crc_info(tti_rx, rnti, cc_idx, ul_cfg.pusch.grant.tb.tbs / 8, pusch_res.crc);
       // Push PDU buffer
-      phy->stack->push_pdu(tti_rx, rnti, cc_idx, ul_cfg.pusch.grant.tb.tbs / 8, pusch_res.crc);
+      phy->stack->push_pdu(
+          tti_rx, rnti, cc_idx, ul_cfg.pusch.grant.tb.tbs / 8, pusch_res.crc, ul_cfg.pusch.grant.L_prb);
       // Logging
       if (logger.info.enabled()) {
         char str[512];
@@ -436,7 +463,11 @@ int cc_worker::decode_pucch()
         }
 
         // Save metrics
-        ue_db[rnti]->metrics_ul_pucch(pucch_res.snr_db);
+        if (pucch_res.detected) {
+          ue_db[rnti]->metrics_ul_pucch(pucch_res.rssi_dbFs - phy->params.rx_gain_offset,
+                                        pucch_res.ni_dbFs - -phy->params.rx_gain_offset,
+                                        pucch_res.snr_db);
+        }
       }
     }
   }
@@ -472,7 +503,7 @@ int cc_worker::encode_pdcch_ul(stack_interface_phy_lte::ul_sched_grant_t* grants
       }
 
       if (SRSRAN_RNTI_ISUSER(grants[i].dci.rnti)) {
-        if (srsran_enb_dl_location_is_common_ncce(&enb_dl, grants[i].dci.location.ncce) &&
+        if (srsran_enb_dl_location_is_common_ncce(&enb_dl, &grants[i].dci.location) &&
             phy->ue_db.is_pcell(grants[i].dci.rnti, cc_idx)) {
           // Disable extended CSI request and SRS request in common SS
           srsran_dci_cfg_set_common_ss(&dci_cfg);
@@ -488,7 +519,7 @@ int cc_worker::encode_pdcch_ul(stack_interface_phy_lte::ul_sched_grant_t* grants
       if (logger.info.enabled()) {
         char str[512];
         srsran_dci_ul_info(&grants[i].dci, str, 512);
-        logger.info("PDCCH: cc=%d, %s, tti_tx_dl=%d", cc_idx, str, tti_tx_dl);
+        logger.info("PDCCH: cc=%d, rnti=0x%x, %s, tti_tx_dl=%d", cc_idx, grants[i].dci.rnti, str, tti_tx_dl);
       }
     }
   }
@@ -507,8 +538,10 @@ int cc_worker::encode_pdcch_dl(stack_interface_phy_lte::dl_sched_grant_t* grants
         continue;
       }
 
+      // Detect if the DCI location is in common SS, if that is the case, flag it as common SS
+      // This makes possible UE specific DCI fields to be disabled, so it uses a fallback DCI size
       if (SRSRAN_RNTI_ISUSER(grants[i].dci.rnti) && grants[i].dci.format == SRSRAN_DCI_FORMAT1A) {
-        if (srsran_enb_dl_location_is_common_ncce(&enb_dl, grants[i].dci.location.ncce) &&
+        if (srsran_enb_dl_location_is_common_ncce(&enb_dl, &grants[i].dci.location) &&
             phy->ue_db.is_pcell(grants[i].dci.rnti, cc_idx)) {
           srsran_dci_cfg_set_common_ss(&dci_cfg);
         }
@@ -523,7 +556,7 @@ int cc_worker::encode_pdcch_dl(stack_interface_phy_lte::dl_sched_grant_t* grants
         // Logging
         char str[512];
         srsran_dci_dl_info(&grants[i].dci, str, 512);
-        logger.info("PDCCH: cc=%d, %s, tti_tx_dl=%d", cc_idx, str, tti_tx_dl);
+        logger.info("PDCCH: cc=%d, rnti=0x%x, %s, tti_tx_dl=%d", cc_idx, grants[i].dci.rnti, str, tti_tx_dl);
       }
     }
   }
@@ -638,7 +671,7 @@ void cc_worker::ue::metrics_read(phy_metrics_t* metrics_)
   if (metrics_) {
     *metrics_ = metrics;
   }
-  bzero(&metrics, sizeof(phy_metrics_t));
+  metrics = {};
 }
 
 void cc_worker::ue::metrics_dl(uint32_t mcs)
@@ -649,15 +682,23 @@ void cc_worker::ue::metrics_dl(uint32_t mcs)
 
 void cc_worker::ue::metrics_ul(uint32_t mcs, float rssi, float sinr, float turbo_iters)
 {
+  if (isnan(rssi)) {
+    rssi = 0;
+  }
   metrics.ul.mcs         = SRSRAN_VEC_CMA((float)mcs, metrics.ul.mcs, metrics.ul.n_samples);
   metrics.ul.pusch_sinr  = SRSRAN_VEC_CMA((float)sinr, metrics.ul.pusch_sinr, metrics.ul.n_samples);
-  metrics.ul.rssi        = SRSRAN_VEC_CMA((float)rssi, metrics.ul.rssi, metrics.ul.n_samples);
+  metrics.ul.pusch_rssi  = SRSRAN_VEC_CMA((float)rssi, metrics.ul.pusch_rssi, metrics.ul.n_samples);
   metrics.ul.turbo_iters = SRSRAN_VEC_CMA((float)turbo_iters, metrics.ul.turbo_iters, metrics.ul.n_samples);
   metrics.ul.n_samples++;
 }
 
-void cc_worker::ue::metrics_ul_pucch(float sinr)
+void cc_worker::ue::metrics_ul_pucch(float rssi, float ni, float sinr)
 {
+  if (isnan(rssi)) {
+    rssi = 0;
+  }
+  metrics.ul.pucch_rssi = SRSRAN_VEC_CMA((float)rssi, metrics.ul.pucch_rssi, metrics.ul.n_samples_pucch);
+  metrics.ul.pucch_ni   = SRSRAN_VEC_CMA((float)ni, metrics.ul.pucch_ni, metrics.ul.n_samples_pucch);
   metrics.ul.pucch_sinr = SRSRAN_VEC_CMA((float)sinr, metrics.ul.pucch_sinr, metrics.ul.n_samples_pucch);
   metrics.ul.n_samples_pucch++;
 }

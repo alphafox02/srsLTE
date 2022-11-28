@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -45,8 +45,8 @@ public:
   bool send_paging(uint64_t imsi, uint16_t erab_to_setup);
 
 private:
-  mme*                  m_mme;
-  s1ap*                 m_s1ap;
+  mme*                  m_mme    = nullptr;
+  s1ap*                 m_s1ap   = nullptr;
   srslog::basic_logger& m_logger = srslog::fetch_basic_logger("S1AP");
 
   s1ap_args_t m_s1ap_args;

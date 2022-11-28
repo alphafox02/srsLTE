@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -246,6 +246,8 @@ SRSRAN_API uint32_t srsran_ue_sync_get_sfn(srsran_ue_sync_t* q);
 SRSRAN_API uint32_t srsran_ue_sync_get_sfidx(srsran_ue_sync_t* q);
 
 SRSRAN_API float srsran_ue_sync_get_cfo(srsran_ue_sync_t* q);
+
+SRSRAN_API void srsran_ue_sync_cp_en(srsran_ue_sync_t* q, bool enabled);
 
 SRSRAN_API float srsran_ue_sync_get_sfo(srsran_ue_sync_t* q);
 

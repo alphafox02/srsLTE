@@ -1,5 +1,5 @@
 #
-# Copyright 2013-2021 Software Radio Systems Limited
+# Copyright 2013-2022 Software Radio Systems Limited
 #
 # This file is part of srsRAN
 #
@@ -39,9 +39,11 @@ target_link_libraries( srsepc  srsepc_mme
                                srsepc_hss
                                srsepc_sgw
                                s1ap_asn1
-                               srsran_upper
+                               srsran_gtpu
+                               srsran_asn1
                                srsran_common
                                srslog
+                               support
                                ${CMAKE_THREAD_LIBS_INIT}
                                ${Boost_LIBRARIES}
                                ${SEC_LIBRARIES}
@@ -50,7 +52,8 @@ target_link_libraries( srsepc  srsepc_mme
 
 add_executable(srsmbms mbms-gw/main.cc )
 target_link_libraries(srsmbms   srsepc_mbms_gw
-                                srsran_upper
+                                srsran_asn1
+                                srsran_gtpu
                                 srsran_common
                                 srslog
                                 ${CMAKE_THREAD_LIBS_INIT}
@@ -73,5 +76,5 @@ else(NOT ${BUILDEPC_CMD} STREQUAL "")
   message(STATUS "No post-build-EPC command defined")
 endif (NOT ${BUILDEPC_CMD} STREQUAL "")
 
-install(TARGETS srsepc DESTINATION ${RUNTIME_DIR})
-install(TARGETS srsmbms DESTINATION ${RUNTIME_DIR})
+install(TARGETS srsepc DESTINATION ${RUNTIME_DIR} OPTIONAL)
+install(TARGETS srsmbms DESTINATION ${RUNTIME_DIR} OPTIONAL)

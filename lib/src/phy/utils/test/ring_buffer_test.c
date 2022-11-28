@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -19,7 +19,7 @@
  *
  */
 
-#include "srsran/common/test_common.h"
+#include "srsran/support/srsran_test.h"
 #include <complex.h>
 #include <math.h>
 #include <pthread.h>

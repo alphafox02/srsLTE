@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -50,15 +50,14 @@ bool phy_common::init(const phy_cell_cfg_list_t&    cell_list_,
   cell_list_lte = cell_list_;
   cell_list_nr  = cell_list_nr_;
 
-  pthread_mutex_init(&mtch_mutex, nullptr);
-  pthread_cond_init(&mtch_cvar, nullptr);
 
   // Instantiate DL channel emulator
   if (params.dl_channel_args.enable) {
+    int channel_prbs = (cell_list_lte.empty()) ? cell_list_nr[0].carrier.nof_prb : cell_list_lte[0].cell.nof_prb;
     dl_channel = srsran::channel_ptr(
         new srsran::channel(params.dl_channel_args, get_nof_rf_channels(), srslog::fetch_basic_logger("PHY")));
-    dl_channel->set_srate((uint32_t)srsran_sampling_freq_hz(cell_list_lte[0].cell.nof_prb));
-    dl_channel->set_signal_power_dBfs(srsran_enb_dl_get_maximum_signal_power_dBfs(cell_list_lte[0].cell.nof_prb));
+    dl_channel->set_srate((uint32_t)srsran_sampling_freq_hz(channel_prbs));
+    dl_channel->set_signal_power_dBfs(srsran_enb_dl_get_maximum_signal_power_dBfs(channel_prbs));
   }
 
   // Create grants
@@ -67,7 +66,13 @@ bool phy_common::init(const phy_cell_cfg_list_t&    cell_list_,
   }
 
   // Set UE PHY data-base stack and configuration
-  ue_db.init(stack, params, cell_list_lte);
+  if (!cell_list_lte.empty()) {
+    ue_db.init(stack, params, cell_list_lte);
+  }
+  if (mcch_configured) {
+    build_mch_table();
+    build_mcch_table();
+  }
 
   reset();
   return true;
@@ -94,7 +99,7 @@ void phy_common::clear_grants(uint16_t rnti)
   }
 }
 
-const stack_interface_phy_lte::ul_sched_list_t& phy_common::get_ul_grants(uint32_t tti)
+const stack_interface_phy_lte::ul_sched_list_t phy_common::get_ul_grants(uint32_t tti)
 {
   std::lock_guard<std::mutex> lock(grant_mutex);
   return ul_grants[tti];
@@ -113,38 +118,50 @@ void phy_common::set_ul_grants(uint32_t tti, const stack_interface_phy_lte::ul_s
  * Each worker uses this function to indicate that all processing is done and data is ready for transmission or
  * there is no transmission at all (tx_enable). In that case, the end of burst message will be sent to the radio
  */
-void phy_common::worker_end(void* tx_sem_id, srsran::rf_buffer_t& buffer, srsran::rf_timestamp_t& tx_time, bool is_nr)
+void phy_common::worker_end(const worker_context_t& w_ctx, const bool& tx_enable, srsran::rf_buffer_t& buffer)
 {
   // Wait for the green light to transmit in the current TTI
-  semaphore.wait(tx_sem_id);
+  semaphore.wait(w_ctx.worker_ptr);
 
-  // If this is for NR, save Tx buffers...
-  if (is_nr) {
-    nr_tx_buffer       = buffer;
-    nr_tx_buffer_ready = true;
+  // For combine buffer with previous buffers
+  if (tx_enable) {
+    tx_buffer.set_nof_samples(buffer.get_nof_samples());
+    tx_buffer.set_combine(buffer);
+  }
+
+  // If the current worker is not the last one, skip transmission
+  if (not w_ctx.last) {
+    if (tx_enable) {
+      reset_last_worker();
+    }
+
+    // Release semaphore and let next worker to get in
     semaphore.release();
+
+    // Wait for the last worker to finish
+    if (tx_enable) {
+      wait_last_worker();
+    }
+
     return;
   }
 
-  // ... otherwise, append NR base-band from saved buffer if available
-  if (nr_tx_buffer_ready) {
-    uint32_t j = 0;
-    for (uint32_t i = 0; i < SRSRAN_MAX_CHANNELS; i++) {
-      if (buffer.get(i) == nullptr) {
-        buffer.set(i, nr_tx_buffer.get(j));
-        j++;
-      }
-    }
-    nr_tx_buffer_ready = false;
-  }
+  // Add current time alignment
+  srsran::rf_timestamp_t tx_time = w_ctx.tx_time; // get transmit time from the last worker
 
   // Run DL channel emulator if created
   if (dl_channel) {
-    dl_channel->run(buffer.to_cf_t(), buffer.to_cf_t(), buffer.get_nof_samples(), tx_time.get(0));
+    dl_channel->run(tx_buffer.to_cf_t(), tx_buffer.to_cf_t(), tx_buffer.get_nof_samples(), tx_time.get(0));
   }
 
   // Always transmit on single radio
-  radio->tx(buffer, tx_time);
+  radio->tx(tx_buffer, tx_time);
+
+  // Reset transmit buffer
+  tx_buffer = {};
+
+  // Notify this is the last worker
+  last_worker();
 
   // Allow next TTI to transmit
   semaphore.release();
@@ -152,19 +169,15 @@ void phy_common::worker_end(void* tx_sem_id, srsran::rf_buffer_t& buffer, srsran
 
 void phy_common::set_mch_period_stop(uint32_t stop)
 {
-  pthread_mutex_lock(&mtch_mutex);
+  std::lock_guard<std::mutex> lock(mtch_mutex);
   have_mtch_stop  = true;
   mch_period_stop = stop;
-  pthread_cond_signal(&mtch_cvar);
-  pthread_mutex_unlock(&mtch_mutex);
+  mtch_cvar.notify_one();
 }
 
 void phy_common::configure_mbsfn(srsran::phy_cfg_mbsfn_t* cfg)
 {
-  mbsfn = *cfg;
-
-  build_mch_table();
-  build_mcch_table();
+  mbsfn            = *cfg;
   sib13_configured = true;
   mcch_configured  = true;
 }
@@ -279,9 +292,11 @@ bool phy_common::is_mch_subframe(srsran_mbsfn_cfg_t* cfg, uint32_t phy_tti)
           uint32_t mbsfn_per_frame = mbsfn.mcch.pmch_info_list[0].sf_alloc_end /
                                      +enum_to_number(mbsfn.mcch.pmch_info_list[0].mch_sched_period);
           uint32_t sf_alloc_idx = frame_alloc_idx * mbsfn_per_frame + ((sf < 4) ? sf - 1 : sf - 3);
+          std::unique_lock<std::mutex> lock(mtch_mutex);
           while (!have_mtch_stop) {
-            pthread_cond_wait(&mtch_cvar, &mtch_mutex);
+            mtch_cvar.wait(lock);
           }
+          lock.unlock();
           for (uint32_t i = 0; i < mbsfn.mcch.nof_pmch_info; i++) {
             if (sf_alloc_idx <= mch_period_stop) {
               cfg->mbsfn_mcs = mbsfn.mcch.pmch_info_list[i].data_mcs;

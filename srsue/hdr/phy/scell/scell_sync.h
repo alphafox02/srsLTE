@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -208,7 +208,11 @@ public:
   /**
    * Resets the class, goes back into IDLE mode
    */
-  void stop() { state = STATE_IDLE; }
+  void stop()
+  {
+    std::unique_lock<std::mutex> lock(mutex);
+    state = STATE_IDLE;
+  }
 
   /**
    * Runs internal FSM, performing Synchronization operations on the provided buffer. It expects data per subframe

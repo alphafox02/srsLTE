@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -72,7 +72,7 @@ void parse_args(int argc, char** argv)
         offset = (int)strtol(argv[optind], NULL, 10);
         break;
       case 'v':
-        srsran_verbose = SRSRAN_VERBOSE_DEBUG;
+        set_srsran_verbose_level(SRSRAN_VERBOSE_DEBUG);
         break;
       default:
         usage(argv[0]);
@@ -184,8 +184,8 @@ int main(int argc, char** argv)
   if (snr != -1.0) {
     snr -= 10.0;
     printf("Adding AWGN with target SNR: %.2fdB\n", snr);
-    float nstd = srsran_convert_dB_to_amplitude(-snr);
-    srsran_ch_awgn_c(fft_buffer, fft_buffer, nstd, SFLEN);
+    float var = srsran_convert_dB_to_power(-snr);
+    srsran_ch_awgn_c(fft_buffer, fft_buffer, var, SFLEN);
   }
 
   // look for NPSS signal

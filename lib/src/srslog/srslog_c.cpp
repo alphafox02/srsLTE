@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -190,7 +190,7 @@ srslog_sink* srslog_fetch_stderr_sink(void)
   return c_cast<srslog_sink>(&fetch_stderr_sink());
 }
 
-srslog_sink* srslog_fetch_file_sink(const char* path, size_t max_size)
+srslog_sink* srslog_fetch_file_sink(const char* path, size_t max_size, srslog_bool force_flush)
 {
-  return c_cast<srslog_sink>(&fetch_file_sink(path, max_size));
+  return c_cast<srslog_sink>(&fetch_file_sink(path, max_size, force_flush));
 }

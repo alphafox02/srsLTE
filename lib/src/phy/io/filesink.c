@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -26,7 +26,7 @@
 
 #include "srsran/phy/io/filesink.h"
 
-int srsran_filesink_init(srsran_filesink_t* q, char* filename, srsran_datatype_t type)
+int srsran_filesink_init(srsran_filesink_t* q, const char* filename, srsran_datatype_t type)
 {
   bzero(q, sizeof(srsran_filesink_t));
   q->f = fopen(filename, "w");

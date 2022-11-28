@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -59,14 +59,6 @@ typedef enum {
 } srsran_dmrs_sch_len_t;
 
 /**
- * @brief Determines whether the first pilot goes into symbol index 2 or 3
- */
-typedef enum {
-  srsran_dmrs_sch_typeA_pos_2 = 0, // Start in slot symbol index 2 (default)
-  srsran_dmrs_sch_typeA_pos_3      // Start in slot symbol index 3
-} srsran_dmrs_sch_typeA_pos_t;
-
-/**
  * @brief Determines additional symbols if possible to be added
  */
 typedef enum {
@@ -93,6 +85,8 @@ typedef struct {
   /// Parameters provided by ServingCellConfigCommon
   srsran_dmrs_sch_typeA_pos_t typeA_pos;
   bool                        lte_CRS_to_match_around;
+
+  uint32_t reference_point_k_rb;
 
   /// Parameters provided by FeatureSetDownlink-v1540
   bool additional_DMRS_DL_Alt;
@@ -193,10 +187,11 @@ typedef struct SRSRAN_API {
   bool     scrambling_id_present;
   uint32_t scambling_id; // Identifier used to initialize data scrambling (0-1023)
 
+  srsran_mcs_table_t     mcs_table;
+  srsran_dmrs_sch_type_t dmrs_type;
+  srsran_dmrs_sch_len_t  dmrs_max_length;
   struct {
-    srsran_dmrs_sch_type_t    type;
     srsran_dmrs_sch_add_pos_t additional_pos;
-    srsran_dmrs_sch_len_t     length;
     bool                      scrambling_id0_present;
     uint32_t                  scrambling_id0;
     bool                      scrambling_id1_present;
@@ -205,9 +200,7 @@ typedef struct SRSRAN_API {
   } dmrs_typeA;
 
   struct {
-    srsran_dmrs_sch_type_t    type;
     srsran_dmrs_sch_add_pos_t additional_pos;
-    srsran_dmrs_sch_len_t     length;
     bool                      scrambling_id0_present;
     uint32_t                  scrambling_id0;
     bool                      scrambling_id1_present;
@@ -233,7 +226,8 @@ typedef struct SRSRAN_API {
   srsran_csi_rs_nzp_set_t nzp_csi_rs_sets[SRSRAN_PHCH_CFG_MAX_NOF_CSI_RS_SETS];
 
   /// PUSCH only
-  srsran_beta_offsets_t beta_offsets; /// Semi-static only.
+  srsran_beta_offsets_t beta_offsets;              /// Semi-static only.
+  bool                  enable_transform_precoder; /// Enables transform precoding
   float scaling; /// Indicates a scaling factor to limit the number of resource elements assigned to UCI on PUSCH.
 } srsran_sch_hl_cfg_nr_t;
 

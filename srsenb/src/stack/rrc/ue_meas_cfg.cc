@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -21,7 +21,8 @@
 
 #include "srsenb/hdr/stack/rrc/ue_meas_cfg.h"
 #include "srsenb/hdr/stack/rrc/rrc_cell_cfg.h"
-#include "srsran/rrc/rrc_cfg_utils.h"
+#include "srsran/asn1/obj_id_cmp_utils.h"
+#include "srsran/asn1/rrc_utils.h"
 
 using namespace asn1::rrc;
 
@@ -93,8 +94,8 @@ std::tuple<bool, meas_obj_t*, cells_to_add_mod_s*> add_cell_enb_cfg(meas_obj_lis
   bool inserted_flag = true;
 
   cells_to_add_mod_s new_cell;
-  asn1::number_to_enum(new_cell.cell_individual_offset, (uint8_t)cellcfg.q_offset);
-  new_cell.pci = cellcfg.pci;
+  new_cell.cell_individual_offset = cellcfg.cell_individual_offset;
+  new_cell.pci                    = cellcfg.pci;
 
   std::pair<meas_obj_t*, meas_cell_t*> ret = find_cell(meas_obj_list, cellcfg.earfcn, cellcfg.pci);
 
@@ -360,11 +361,12 @@ bool fill_meascfg_enb_cfg(meas_cfg_s& meascfg, const ue_cell_ded_list& ue_cell_l
   meascfg.quant_cfg.quant_cfg_eutra         = pcell_meascfg.quant_cfg;
 
   // Insert all measIds
-  // TODO: add this to the parser
+  // TODO: add this to the parser. Now we combine all reports with all objects
   if (meascfg.report_cfg_to_add_mod_list.size() > 0) {
     for (const auto& measobj : meascfg.meas_obj_to_add_mod_list) {
-      add_measid_cfg(
-          meascfg.meas_id_to_add_mod_list, measobj.meas_obj_id, meascfg.report_cfg_to_add_mod_list[0].report_cfg_id);
+      for (const auto& measrep : meascfg.report_cfg_to_add_mod_list) {
+        add_measid_cfg(meascfg.meas_id_to_add_mod_list, measobj.meas_obj_id, measrep.report_cfg_id);
+      }
     }
   }
 
@@ -432,8 +434,7 @@ bool apply_meascfg_updates(meas_cfg_s&             meascfg,
       for (auto it = current_meascfg.meas_id_to_add_mod_list.begin();
            it != current_meascfg.meas_id_to_add_mod_list.end();) {
         if (it->meas_obj_id == found_src_obj->meas_obj_id) {
-          auto rit = it++;
-          current_meascfg.meas_id_to_add_mod_list.erase(rit);
+          it = current_meascfg.meas_id_to_add_mod_list.erase(it);
         } else {
           ++it;
         }

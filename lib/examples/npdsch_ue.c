@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -228,7 +228,7 @@ void parse_args(prog_args_t* args, int argc, char** argv)
         args->disable_plots_except_constellation = true;
         break;
       case 'v':
-        srsran_verbose++;
+        increase_srsran_verbose_level();
         break;
       default:
         usage(args, argv[0]);
@@ -339,7 +339,7 @@ int main(int argc, char** argv)
   parse_args(&prog_args, argc, argv);
 
 #if HAVE_PCAP
-  FILE* pcap_file = LTE_PCAP_Open(MAC_LTE_DLT, "/tmp/npdsch.pcap");
+  FILE* pcap_file = DLT_PCAP_Open(MAC_LTE_DLT, "/tmp/npdsch.pcap");
 #endif
 
   sigset_t sigset;
@@ -865,7 +865,7 @@ int main(int argc, char** argv)
 
 #if HAVE_PCAP
   printf("Saving PCAP file\n");
-  LTE_PCAP_Close(pcap_file);
+  DLT_PCAP_Close(pcap_file);
 #endif
 
 #ifndef DISABLE_RF

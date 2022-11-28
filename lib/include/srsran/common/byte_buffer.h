@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -28,6 +28,7 @@
 #include <cstdint>
 
 //#define SRSRAN_BUFFER_POOL_LOG_ENABLED
+#define SRSRAN_BUFFER_POOL_LOG_NAME_LEN 128
 
 namespace srsran {
 
@@ -127,7 +128,7 @@ public:
     // avoid self assignment
     if (&buf == this)
       return *this;
-    msg     = &buffer[SRSRAN_BUFFER_HEADER_OFFSET];
+    msg     = &buffer[buf.msg - &(*buf.buffer)];
     N_bytes = buf.N_bytes;
     md      = buf.md;
     memcpy(msg, buf.msg, N_bytes);

@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -21,6 +21,7 @@
 
 #include "srsue/hdr/stack/ue_stack_nr.h"
 #include "srsran/srsran.h"
+#include "srsue/hdr/stack/rrc_nr/rrc_nr.h"
 
 using namespace srsran;
 
@@ -84,11 +85,18 @@ int ue_stack_nr::init(const stack_args_t& args_)
   rrc_nr_args_t rrc_args     = {};
   rrc_args.log_level         = args.log.rrc_level;
   rrc_args.log_hex_limit     = args.log.rrc_hex_limit;
-  rrc_args.coreless.drb_lcid = 4;
-  rrc_args.coreless.ip_addr  = "192.168.1.3";
-  rrc->init(
-      phy, mac.get(), rlc.get(), pdcp.get(), gw, nullptr, nullptr, task_sched.get_timer_handler(), this, rrc_args);
-  rrc->init_core_less();
+  rrc->init(phy,
+            mac.get(),
+            rlc.get(),
+            pdcp.get(),
+            sdap.get(),
+            gw,
+            nullptr,
+            nullptr,
+            nullptr,
+            task_sched.get_timer_handler(),
+            this,
+            rrc_args);
   running = true;
   start(STACK_MAIN_THREAD_PRIO);
 
@@ -119,8 +127,13 @@ void ue_stack_nr::stop_impl()
 bool ue_stack_nr::switch_on()
 {
   // statically setup TUN (will be done through RRC later)
-  char* err_str = nullptr;
-  if (gw->setup_if_addr(5, 4, LIBLTE_MME_PDN_TYPE_IPV4, htonl(inet_addr("192.168.1.3")), nullptr, err_str)) {
+  char*          err_str = nullptr;
+  struct in_addr in_addr;
+  if (inet_pton(AF_INET, "192.168.1.3", &in_addr.s_addr) != 1) {
+    perror("inet_pton");
+    return false;
+  }
+  if (gw->setup_if_addr(5, LIBLTE_MME_PDN_TYPE_IPV4, htonl(in_addr.s_addr), nullptr, err_str)) {
     printf("Error configuring TUN interface\n");
   }
   return true;
@@ -163,9 +176,9 @@ void ue_stack_nr::run_thread()
 void ue_stack_nr::write_sdu(uint32_t lcid, srsran::unique_byte_buffer_t sdu)
 {
   if (pdcp != nullptr) {
-    std::pair<bool, move_task_t> ret = gw_task_queue.try_push(std::bind(
+    auto ret = gw_task_queue.try_push(std::bind(
         [this, lcid](srsran::unique_byte_buffer_t& sdu) { pdcp->write_sdu(lcid, std::move(sdu)); }, std::move(sdu)));
-    if (not ret.first) {
+    if (ret.is_error()) {
       pdcp_logger.warning("GW SDU with lcid=%d was discarded.", lcid);
     }
   }
@@ -188,7 +201,7 @@ void ue_stack_nr::out_of_sync()
   // pending_tasks.push(sync_task_queue, task_t{[this](task_t*) { rrc.out_of_sync(); }});
 }
 
-void ue_stack_nr::run_tti(uint32_t tti)
+void ue_stack_nr::run_tti(uint32_t tti, uint32_t tti_jump)
 {
   sync_task_queue.push([this, tti]() { run_tti_impl(tti); });
 }
@@ -198,6 +211,21 @@ void ue_stack_nr::run_tti_impl(uint32_t tti)
   mac->run_tti(tti);
   rrc->run_tti(tti);
   task_sched.tic();
+}
+
+void ue_stack_nr::set_phy_config_complete(bool status)
+{
+  sync_task_queue.push([this, status]() { rrc->set_phy_config_complete(status); });
+}
+
+void ue_stack_nr::cell_search_found_cell(const cell_search_result_t& result)
+{
+  sync_task_queue.push([this, result]() { rrc->cell_search_found_cell(result); });
+}
+
+void ue_stack_nr::cell_select_completed(const rrc_interface_phy_nr::cell_select_result_t& result)
+{
+  sync_task_queue.push([this, result]() { rrc->cell_select_completed(result); });
 }
 
 } // namespace srsue

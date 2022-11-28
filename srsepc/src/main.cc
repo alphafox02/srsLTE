@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -27,9 +27,10 @@
 #include "srsran/common/common_helper.h"
 #include "srsran/common/config_file.h"
 #include "srsran/common/crash_handler.h"
-#include "srsran/common/signal_handler.h"
 #include "srsran/srslog/srslog.h"
 #include "srsran/srsran.h"
+#include "srsran/support/emergency_handlers.h"
+#include "srsran/support/signal_handler.h"
 #include <boost/program_options.hpp>
 #include <iostream>
 
@@ -64,6 +65,9 @@ typedef struct {
   log_args_t  log_args;
 } all_args_t;
 
+static srslog::sink*     log_sink = nullptr;
+static std::atomic<bool> running  = {true};
+
 /**********************************************************************
  *  Program arguments processing
  ***********************************************************************/
@@ -89,9 +93,11 @@ void parse_args(all_args_t* args, int argc, char* argv[])
   string   dns_addr;
   string   full_net_name;
   string   short_net_name;
+  bool     request_imeisv;
   string   hss_db_file;
   string   hss_auth_algo;
   string   log_filename;
+  string   lac;
 
   // Command line only options
   bpo::options_description general("General options");
@@ -118,6 +124,8 @@ void parse_args(all_args_t* args, int argc, char* argv[])
     ("mme.encryption_algo", bpo::value<string>(&encryption_algo)->default_value("EEA0"),     "Set preferred encryption algorithm for NAS layer ")
     ("mme.integrity_algo",  bpo::value<string>(&integrity_algo)->default_value("EIA1"),      "Set preferred integrity protection algorithm for NAS")
     ("mme.paging_timer",    bpo::value<uint16_t>(&paging_timer)->default_value(2),           "Set paging timer value in seconds (T3413)")
+    ("mme.request_imeisv",  bpo::value<bool>(&request_imeisv)->default_value(false),         "Enable IMEISV request in Security mode command")
+    ("mme.lac",             bpo::value<string>(&lac)->default_value("0x01"),                 "Location Area Code")
     ("hss.db_file",         bpo::value<string>(&hss_db_file)->default_value("ue_db.csv"),    ".csv file that stores UE's keys")
     ("spgw.gtpu_bind_addr", bpo::value<string>(&spgw_bind_addr)->default_value("127.0.0.1"), "IP address of SP-GW for the S1-U connection")
     ("spgw.sgi_if_addr",    bpo::value<string>(&sgi_if_addr)->default_value("176.16.0.1"),   "IP address of TUN interface for the SGi connection")
@@ -221,6 +229,11 @@ void parse_args(all_args_t* args, int argc, char* argv[])
     sstr << std::hex << vm["mme.tac"].as<std::string>();
     sstr >> args->mme_args.s1ap_args.tac;
   }
+  {
+    std::stringstream sstr;
+    sstr << std::hex << vm["mme.lac"].as<std::string>();
+    sstr >> args->mme_args.s1ap_args.lac;
+  }
 
   // Convert MCC/MNC strings
   if (!srsran::string_to_mcc(mcc, &args->mme_args.s1ap_args.mcc)) {
@@ -270,18 +283,19 @@ void parse_args(all_args_t* args, int argc, char* argv[])
     cout << "Using default mme.integrity_algo: EIA1" << endl;
   }
 
-  args->mme_args.s1ap_args.mme_bind_addr = mme_bind_addr;
-  args->mme_args.s1ap_args.mme_name      = mme_name;
-  args->mme_args.s1ap_args.dns_addr      = dns_addr;
+  args->mme_args.s1ap_args.mme_bind_addr  = mme_bind_addr;
+  args->mme_args.s1ap_args.mme_name       = mme_name;
+  args->mme_args.s1ap_args.dns_addr       = dns_addr;
   args->mme_args.s1ap_args.full_net_name  = full_net_name;
   args->mme_args.s1ap_args.short_net_name = short_net_name;
-  args->mme_args.s1ap_args.mme_apn       = mme_apn;
-  args->mme_args.s1ap_args.paging_timer  = paging_timer;
-  args->spgw_args.gtpu_bind_addr         = spgw_bind_addr;
-  args->spgw_args.sgi_if_addr            = sgi_if_addr;
-  args->spgw_args.sgi_if_name            = sgi_if_name;
-  args->spgw_args.max_paging_queue       = max_paging_queue;
-  args->hss_args.db_file                 = hss_db_file;
+  args->mme_args.s1ap_args.mme_apn        = mme_apn;
+  args->mme_args.s1ap_args.paging_timer   = paging_timer;
+  args->mme_args.s1ap_args.request_imeisv = request_imeisv;
+  args->spgw_args.gtpu_bind_addr          = spgw_bind_addr;
+  args->spgw_args.sgi_if_addr             = sgi_if_addr;
+  args->spgw_args.sgi_if_name             = sgi_if_name;
+  args->spgw_args.max_paging_queue        = max_paging_queue;
+  args->hss_args.db_file                  = hss_db_file;
 
   // Apply all_level to any unset layers
   if (vm.count("log.all_level")) {
@@ -362,9 +376,23 @@ std::string get_build_string()
   return ss.str();
 }
 
+static void emergency_cleanup_handler(void* data)
+{
+  srslog::flush();
+  if (log_sink) {
+    log_sink->flush();
+  }
+}
+
+static void signal_handler()
+{
+  running = false;
+}
+
 int main(int argc, char* argv[])
 {
-  srsran_register_signal_handler();
+  srsran_register_signal_handler(signal_handler);
+  add_emergency_cleanup_handler(emergency_cleanup_handler, nullptr);
 
   // print build info
   cout << endl << get_build_string() << endl;
@@ -372,7 +400,7 @@ int main(int argc, char* argv[])
   cout << endl << "---  Software Radio Systems EPC  ---" << endl << endl;
   srsran_debug_handle_crash(argc, argv);
 
-  all_args_t args;
+  all_args_t args = {};
   parse_args(&args, argc, argv);
 
   // Setup logging.

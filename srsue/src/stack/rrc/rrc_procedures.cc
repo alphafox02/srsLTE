@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -50,7 +50,7 @@ proc_outcome_t rrc::cell_search_proc::init()
 {
   Info("Starting...");
   state = state_t::phy_cell_search;
-  if (not rrc_ptr->phy_ctrl->start_cell_search(rrc_ptr->cell_searcher)) {
+  if (not rrc_ptr->phy_ctrl->start_cell_search(rrc_ptr->cell_searcher, rrc_ptr->cell_search_earfcn)) {
     Warning("Failed to initiate Cell Search.");
     return proc_outcome_t::error;
   }
@@ -944,6 +944,60 @@ srsran::proc_outcome_t rrc::connection_request_proc::react(const cell_selection_
 }
 
 /******************************************
+ *  Connection Setup Procedure
+ *****************************************/
+
+// Simple procedure mainly do defer the transmission of the SetupComplete until all PHY reconfiguration are done
+rrc::connection_setup_proc::connection_setup_proc(srsue::rrc* parent_) :
+  rrc_ptr(parent_), logger(srslog::fetch_basic_logger("RRC"))
+{}
+
+srsran::proc_outcome_t rrc::connection_setup_proc::init(const asn1::rrc::rr_cfg_ded_s* cnfg_,
+                                                        srsran::unique_byte_buffer_t   dedicated_info_nas_)
+{
+  Info("Starting...");
+
+  if (dedicated_info_nas_.get() == nullptr) {
+    rrc_ptr->logger.error("Connection Setup Failed, no dedicatedInfoNAS available");
+    return proc_outcome_t::error;
+  }
+
+  dedicated_info_nas = std::move(dedicated_info_nas_);
+
+  // Apply the Radio Resource configuration
+  if (!rrc_ptr->apply_rr_config_dedicated(cnfg_)) {
+    return proc_outcome_t::error;
+  }
+
+  rrc_ptr->nas->set_barring(srsran::barring_t::none);
+
+  // No phy config was scheduled, run config completion immediately
+  if (rrc_ptr->phy_ctrl->is_config_pending()) {
+    return react(true);
+  }
+  return proc_outcome_t::yield;
+}
+
+srsran::proc_outcome_t rrc::connection_setup_proc::react(const bool& config_complete)
+{
+  if (not config_complete) {
+    rrc_ptr->logger.error("Connection Setup Failed");
+    return proc_outcome_t::error;
+  }
+
+  rrc_ptr->send_con_setup_complete(std::move(dedicated_info_nas));
+  return proc_outcome_t::success;
+}
+
+void rrc::connection_setup_proc::then(const srsran::proc_state_t& result)
+{
+  if (result.is_success()) {
+    rrc_ptr->logger.info("Finished %s successfully", name());
+    return;
+  }
+}
+
+/******************************************
  *  Connection Reconfiguration Procedure
  *****************************************/
 
@@ -1211,11 +1265,14 @@ proc_outcome_t rrc::go_idle_proc::step()
 
 void rrc::go_idle_proc::then(const srsran::proc_state_t& result)
 {
-  if (rrc_ptr->nas->is_registered() and not rrc_ptr->cell_reselector.launch()) {
-    rrc_ptr->logger.error("Failed to initiate a Cell Reselection procedure...");
-    return;
+  // only start cell reselection if no RRC redirect is present (redirect will trigger a cell search)
+  if (rrc_ptr->cell_search_earfcn < 0) {
+    if (rrc_ptr->nas->is_registered() and not rrc_ptr->cell_reselector.launch()) {
+      rrc_ptr->logger.error("Failed to initiate a Cell Reselection procedure...");
+      return;
+    }
+    rrc_ptr->callback_list.add_proc(rrc_ptr->cell_reselector);
   }
-  rrc_ptr->callback_list.add_proc(rrc_ptr->cell_reselector);
 }
 
 /**************************************
@@ -1316,13 +1373,11 @@ rrc::connection_reest_proc::connection_reest_proc(srsue::rrc* rrc_) : rrc_ptr(rr
 proc_outcome_t rrc::connection_reest_proc::init(asn1::rrc::reest_cause_e cause)
 {
   // Save Current RNTI before MAC Reset
-  mac_interface_rrc::ue_rnti_t uernti;
-  rrc_ptr->mac->get_rntis(&uernti);
-  size_t nof_scells_active = rrc_ptr->phy_ctrl->current_config_scells().count();
+  uint16_t crnti             = rrc_ptr->mac->get_crnti();
+  size_t   nof_scells_active = rrc_ptr->phy_ctrl->current_config_scells().count();
 
   // 5.3.7.1 - Conditions for Reestablishment procedure
-  if (not rrc_ptr->security_is_activated or rrc_ptr->state != RRC_STATE_CONNECTED or
-      uernti.crnti == SRSRAN_INVALID_RNTI) {
+  if (not rrc_ptr->security_is_activated or rrc_ptr->state != RRC_STATE_CONNECTED or crnti == SRSRAN_INVALID_RNTI) {
     Warning("Conditions are NOT met to start procedure.");
     return proc_outcome_t::error;
   }
@@ -1334,16 +1389,16 @@ proc_outcome_t rrc::connection_reest_proc::init(asn1::rrc::reest_cause_e cause)
     reest_source_pci  = rrc_ptr->ho_handler.get()->ho_src_cell.pci;
     reest_source_freq = rrc_ptr->ho_handler.get()->ho_src_cell.earfcn;
   } else {
-    reest_rnti        = uernti.crnti;
+    reest_rnti        = crnti;
     reest_source_pci  = rrc_ptr->meas_cells.serving_cell().get_pci(); // needed for reestablishment with another cell
     reest_source_freq = rrc_ptr->meas_cells.serving_cell().get_earfcn();
   }
   reest_cellid = rrc_ptr->meas_cells.find_cell(reest_source_freq, reest_source_pci)->get_cell_id();
 
   Info("Starting... cause: \"%s\", UE context: {C-RNTI=0x%x, PCI=%d, CELL ID=%d}",
-       reest_cause == asn1::rrc::reest_cause_opts::recfg_fail
-           ? "Reconfiguration failure"
-           : cause == asn1::rrc::reest_cause_opts::ho_fail ? "Handover failure" : "Other failure",
+       reest_cause == asn1::rrc::reest_cause_opts::recfg_fail ? "Reconfiguration failure"
+       : cause == asn1::rrc::reest_cause_opts::ho_fail        ? "Handover failure"
+                                                              : "Other failure",
        reest_rnti,
        reest_source_pci,
        reest_cellid);
@@ -1509,6 +1564,8 @@ srsran::proc_outcome_t rrc::connection_reest_proc::react(const asn1::rrc::rrc_co
   // 1> perform the measurement related actions as specified in 5.5.6.1;
   rrc_ptr->measurements->ho_reest_actions(rrc_ptr->get_serving_cell()->get_earfcn(),
                                           rrc_ptr->get_serving_cell()->get_earfcn());
+  // Update PHY measurements after HO Reestablishment actions.
+  rrc_ptr->measurements->update_phy();
 
   // 1> submit the RRCConnectionReestablishmentComplete message to lower layers for transmission, upon which the
   //    procedure ends;
@@ -1606,14 +1663,15 @@ srsran::proc_outcome_t rrc::ho_proc::init(const asn1::rrc::rrc_conn_recfg_s& rrc
 
   // Save serving cell and current configuration
   ho_src_cell = rrc_ptr->meas_cells.serving_cell().phy_cell;
-  mac_interface_rrc::ue_rnti_t uernti;
-  rrc_ptr->mac->get_rntis(&uernti);
-  ho_src_rnti = uernti.crnti;
+  ho_src_rnti = rrc_ptr->mac->get_crnti();
 
   // Section 5.3.5.4
   rrc_ptr->t310.stop();
   rrc_ptr->t304.set(mob_ctrl_info->t304.to_number(), [this](uint32_t tid) { rrc_ptr->timer_expired(tid); });
   rrc_ptr->t304.run();
+
+  // Indicate RLF-Report that a new HO has been received
+  rrc_ptr->var_rlf_report.received_ho_command(rrc_ptr->meas_cells.serving_cell().get_cell_id_bit());
 
   // starting at start synchronising to the DL of the target PCell
   rrc_ptr->set_serving_cell(target_cell, false);
@@ -1691,22 +1749,22 @@ srsran::proc_outcome_t rrc::ho_proc::init(const asn1::rrc::rrc_conn_recfg_s& rrc
   // perform the measurement related actions as specified in 5.5.6.1;
   rrc_ptr->measurements->ho_reest_actions(ho_src_cell.earfcn, target_earfcn);
 
-  // if the RRCConnectionReconfiguration message includes the measConfig:
-  if (not rrc_ptr->measurements->parse_meas_config(&recfg_r8, true, ho_src_cell.earfcn)) {
-    Error("Parsing measurementConfig. TODO: Send ReconfigurationReject");
-    return proc_outcome_t::yield; // wait for t304 expiry
-  }
+  // Do not update PHY measurements here since it will be updated after the HO procedure finishes
 
-  // Have RRCReconfComplete message ready when Msg3 is sent
-  rrc_ptr->send_rrc_con_reconfig_complete();
+  // Note: We delay the enqueuing of RRC Reconf Complete message to avoid that the message goes in an UL grant
+  //       directed at the old RNTI.
+  rrc_ptr->task_sched.defer_callback(4, [this]() {
+    // Have RRCReconfComplete message ready when Msg3 is sent
+    rrc_ptr->send_rrc_con_reconfig_complete();
 
-  // SCell addition/removal can take some time to compute. Enqueue in a background task and do it in the end.
-  rrc_ptr->apply_scell_config(&recfg_r8, false);
+    // SCell addition/removal can take some time to compute. Enqueue in a background task and do it in the end.
+    rrc_ptr->apply_scell_config(&recfg_r8, false);
 
-  // Send PDCP status report if configured
-  rrc_ptr->pdcp->send_status_report();
+    // Send PDCP status report if configured
+    rrc_ptr->pdcp->send_status_report();
 
-  Info("Finished HO configuration. Waiting PHY to synchronize with target cell");
+    Info("Finished HO configuration. Waiting PHY to synchronize with target cell");
+  });
 
   return proc_outcome_t::yield;
 }
@@ -1728,6 +1786,12 @@ srsran::proc_outcome_t rrc::ho_proc::react(ra_completed_ev ev)
   if (ev.success) {
     Info("Random Access completed. Applying final configuration and finishing procedure");
 
+    // if the RRCConnectionReconfiguration message includes the measConfig:
+    if (not rrc_ptr->measurements->parse_meas_config(&recfg_r8, true, ho_src_cell.earfcn)) {
+      Error("Parsing measurementConfig. TODO: Send ReconfigurationReject");
+      return proc_outcome_t::yield; // wait for t304 expiry
+    }
+
     // TS 36.331, sec. 5.3.5.4, last "1>"
     rrc_ptr->t304.stop();
     rrc_ptr->apply_rr_config_dedicated_on_ho_complete(recfg_r8.rr_cfg_ded);
@@ -1745,6 +1809,8 @@ void rrc::ho_proc::then(const srsran::proc_state_t& result)
   srsran::console("HO %ssuccessful\n", result.is_success() ? "" : "un");
 
   rrc_ptr->t304.stop();
+
+  rrc_ptr->measurements->update_phy();
 }
 
 } // namespace srsue

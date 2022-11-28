@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -69,6 +69,7 @@ public:
   virtual void reset()                               = 0;
   virtual void reestablish()                         = 0;
 
+  void set_enabled(bool enabled) { active = enabled; }
   bool is_active() { return active; }
   bool is_srb() { return cfg.rb_type == PDCP_RB_IS_SRB; }
   bool is_drb() { return cfg.rb_type == PDCP_RB_IS_DRB; }
@@ -84,7 +85,7 @@ public:
     } else {
       integrity_direction = direction;
     }
-    logger.debug("LCID=%d, integrity=%s", lcid, srsran_direction_text[integrity_direction]);
+    logger.debug("Enabled integrity. LCID=%d, integrity=%s", lcid, srsran_direction_text[integrity_direction]);
   }
 
   void enable_encryption(srsran_direction_t direction = DIRECTION_TXRX)
@@ -97,7 +98,7 @@ public:
     } else {
       encryption_direction = direction;
     }
-    logger.debug("LCID=%d encryption=%s", lcid, srsran_direction_text[integrity_direction]);
+    logger.debug("Enabled encryption. LCID=%d, encryption=%s", lcid, srsran_direction_text[integrity_direction]);
   }
 
   void enable_security_timed(srsran_direction_t direction, uint32_t sn)
@@ -141,6 +142,8 @@ public:
   virtual pdcp_bearer_metrics_t get_metrics()   = 0;
   virtual void                  reset_metrics() = 0;
 
+  const char* get_rb_name() const { return rb_name.c_str(); }
+
 protected:
   srslog::basic_logger&     logger;
   srsran::task_sched_handle task_sched;
@@ -162,6 +165,7 @@ protected:
                        pdcp_discard_timer_t::infinity,
                        false,
                        srsran_rat_t::lte};
+  std::string   rb_name;
 
   srsran::as_security_config_t sec_cfg = {};
 

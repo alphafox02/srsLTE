@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -23,25 +23,30 @@
 #define SRSRAN_S1AP_PCAP_H
 
 #include "srsran/common/pcap.h"
+#include <string>
 
 namespace srsran {
 
 class s1ap_pcap
 {
 public:
-  s1ap_pcap()
-  {
-    enable_write = false;
-    pcap_file    = NULL;
-  }
+  s1ap_pcap();
+  ~s1ap_pcap();
+  s1ap_pcap(const s1ap_pcap& other) = delete;
+  s1ap_pcap& operator=(const s1ap_pcap& other) = delete;
+  s1ap_pcap(s1ap_pcap&& other)                 = delete;
+  s1ap_pcap& operator=(s1ap_pcap&& other) = delete;
+
   void enable();
-  void open(const char* filename);
+  void open(const char* filename_);
   void close();
   void write_s1ap(uint8_t* pdu, uint32_t pdu_len_bytes);
 
 private:
-  bool  enable_write;
-  FILE* pcap_file;
+  bool        enable_write = false;
+  std::string filename;
+  FILE*       pcap_file            = nullptr;
+  int         emergency_handler_id = -1;
 };
 
 } // namespace srsran

@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -22,7 +22,8 @@
 #ifndef SRSRAN_SCHED_GRID_H
 #define SRSRAN_SCHED_GRID_H
 
-#include "lib/include/srsran/interfaces/sched_interface.h"
+#include "sched_common.h"
+#include "sched_interface.h"
 #include "sched_phy_ch/sched_result.h"
 #include "sched_phy_ch/sf_cch_allocator.h"
 #include "sched_ue.h"
@@ -32,20 +33,6 @@
 #include <vector>
 
 namespace srsenb {
-
-/// Error code of alloc attempt
-enum class alloc_result {
-  success,
-  sch_collision,
-  no_cch_space,
-  no_sch_space,
-  no_rnti_opportunity,
-  invalid_grant_params,
-  invalid_coderate,
-  no_grant_space,
-  other_cause
-};
-const char* to_string(alloc_result res);
 
 struct sf_sched_result {
   tti_point                    tti_rx;
@@ -163,6 +150,9 @@ public:
   struct bc_alloc_t : public ctrl_alloc_t {
     sched_interface::dl_sched_bc_t bc_grant;
   };
+  struct po_alloc_t : public ctrl_alloc_t {
+    sched_interface::dl_sched_po_t po_grant;
+  };
   struct dl_alloc_t {
     size_t    dci_idx;
     uint16_t  rnti;
@@ -196,12 +186,14 @@ public:
   alloc_result alloc_sib(uint32_t aggr_lvl, uint32_t sib_idx, uint32_t sib_ntx, rbg_interval rbgs);
   alloc_result alloc_paging(uint32_t aggr_lvl, uint32_t paging_payload, rbg_interval rbgs);
   alloc_result alloc_rar(uint32_t aggr_lvl, const pending_rar_t& rar_grant, rbg_interval rbgs, uint32_t nof_grants);
+  alloc_result
+       alloc_pdcch_order(const sched_interface::dl_sched_po_info_t& po_cfg, uint32_t aggr_lvl, rbg_interval rbgs);
   bool reserve_dl_rbgs(uint32_t rbg_start, uint32_t rbg_end) { return tti_alloc.reserve_dl_rbgs(rbg_start, rbg_end); }
 
   // UL alloc methods
   alloc_result alloc_msg3(sched_ue* user, const sched_interface::dl_sched_rar_grant_t& rargrant);
   alloc_result
-               alloc_ul(sched_ue* user, prb_interval alloc, ul_alloc_t::type_t alloc_type, bool is_msg3 = false, int msg3_mcs = -1);
+  alloc_ul(sched_ue* user, prb_interval alloc, ul_alloc_t::type_t alloc_type, bool is_msg3 = false, int msg3_mcs = -1);
   alloc_result reserve_ul_prbs(const prbmask_t& ulmask, bool strict)
   {
     return tti_alloc.reserve_ul_prbs(ulmask, strict);
@@ -236,15 +228,16 @@ private:
                            sched_ue_list&                          ue_list);
 
   // consts
-  const sched_cell_params_t* cc_cfg = nullptr;
+  const sched_cell_params_t* cc_cfg     = nullptr;
+  sf_sched_result*           cc_results = nullptr; ///< Results of other CCs for the same Subframe
   srslog::basic_logger&      logger;
-  sf_sched_result*           cc_results; ///< Results of other CCs for the same Subframe
 
   // internal state
   sf_grid_t tti_alloc;
 
   srsran::bounded_vector<bc_alloc_t, sched_interface::MAX_BC_LIST>   bc_allocs;
   srsran::bounded_vector<rar_alloc_t, sched_interface::MAX_RAR_LIST> rar_allocs;
+  srsran::bounded_vector<po_alloc_t, sched_interface::MAX_PO_LIST>   po_allocs;
   srsran::bounded_vector<dl_alloc_t, sched_interface::MAX_DATA_LIST> data_allocs;
   srsran::bounded_vector<ul_alloc_t, sched_interface::MAX_DATA_LIST> ul_data_allocs;
   uint32_t                                                           last_msg3_prb = 0, max_msg3_prb = 0;

@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -69,7 +69,7 @@ private:
 
   int  encode_pdsch(stack_interface_phy_lte::dl_sched_grant_t* grants, uint32_t nof_grants);
   int  encode_pmch(stack_interface_phy_lte::dl_sched_grant_t* grant, srsran_mbsfn_cfg_t* mbsfn_cfg);
-  void decode_pusch_rnti(stack_interface_phy_lte::ul_sched_grant_t& ul_grant,
+  bool decode_pusch_rnti(stack_interface_phy_lte::ul_sched_grant_t& ul_grant,
                          srsran_ul_cfg_t&                           ul_cfg,
                          srsran_pusch_res_t&                        pusch_res);
   void decode_pusch(stack_interface_phy_lte::ul_sched_grant_t* grants, uint32_t nof_pusch);
@@ -109,7 +109,7 @@ private:
     void     metrics_read(phy_metrics_t* metrics);
     void     metrics_dl(uint32_t mcs);
     void     metrics_ul(uint32_t mcs, float rssi, float sinr, float turbo_iters);
-    void     metrics_ul_pucch(float sinr);
+    void     metrics_ul_pucch(float rssi, float ni, float sinr);
     uint32_t get_rnti() const { return rnti; }
 
   private:

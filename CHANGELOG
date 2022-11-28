@@ -1,6 +1,40 @@
 Change Log for Releases
 =======================
 
+## 22.10
+  * Fix DL NAS integrity checks in srsUE
+  * Remove Travis and LGTM as CI platforms
+  * Remove polarssl as optional dependency (only mbedTLS used and required for security)
+  * Allow to specify multiple PLMNs in SIB1
+  * Allow non-blocking S1AP connect and expose various other SCTP options
+  * Add support to broadcast MAC backoff indicator
+  * Seperate T300/T301 timer in srsENB
+  * Fix in eMBMS payload buffer handling
+  * Fix memleak in NR scheduler
+
+## 22.04.1
+  * Various bug fixes in RLC AM and PDCP for NR
+  * Fix crash when UE attempted to reestablish in SA
+  * Remove fixed coreset0 index for SSB
+  * Add support for SIB5 and SIB6 transmission in LTE
+  
+## 22.04
+  * Added baseline 5G-SA support to srsUE and srsENB
+  * Added dynamic loading of RF libraries
+  * Added RRC Redirect to srsUE
+  * Added support for A5 measurement events to srsENB
+  * Added Crest Factor Reduction (CFR) for srsENB downlink and srsUE uplink (4G only)
+  * Raise C++ standard to C++14
+  * Other bug-fixes and improved stability and performance in all parts
+
+## 21.10
+  * Add initial 5G NSA support to srsENB (tested with OnePlus 5G Nord)
+  * Improved interoperability of srsUE in NSA mode
+  * Added enhanced instrumentation to file using JSON format
+  * Fixed stability issues with Ettus N310
+  * Added BLER-adaptive MCS scheduling to srsENB
+  * Other bug-fixes and improved stability and performance in all parts
+
 ## 21.04
   * Rename project from srsLTE to srsRAN
   * Add initial 5G NSA support to srsUE (including x86-optimized FEC and PHY layer)

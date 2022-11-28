@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -45,7 +45,9 @@ nas::nas(const nas_init_t& args, const nas_if_t& itf) :
   m_dns(args.dns),
   m_full_net_name(args.full_net_name),
   m_short_net_name(args.short_net_name),
-  m_t3413(args.paging_timer)
+  m_t3413(args.paging_timer),
+  m_request_imeisv(args.request_imeisv),
+  m_lac(args.lac)
 {
   m_sec_ctx.integ_algo  = args.integ_algo;
   m_sec_ctx.cipher_algo = args.cipher_algo;
@@ -643,8 +645,6 @@ bool nas::handle_service_request(uint32_t                m_tmsi,
     srsran::console("Service Request -- Short MAC valid\n");
     nas_logger.info("Service Request -- Short MAC valid");
     if (ecm_ctx->state == ECM_STATE_CONNECTED) {
-      nas_logger.error("Service Request -- User is ECM CONNECTED");
-
       // Release previous context
       nas_logger.info("Service Request -- Releasing previouse ECM context. eNB S1AP Id %d, MME UE S1AP Id %d",
                       ecm_ctx->enb_ue_s1ap_id,
@@ -696,8 +696,6 @@ bool nas::handle_service_request(uint32_t                m_tmsi,
     srsran::console("Service Request -- Short MAC invalid\n");
     nas_logger.info("Service Request -- Short MAC invalid");
     if (ecm_ctx->state == ECM_STATE_CONNECTED) {
-      nas_logger.error("Service Request -- User is ECM CONNECTED");
-
       // Release previous context
       nas_logger.info("Service Request -- Releasing previouse ECM context. eNB S1AP Id %d, MME UE S1AP Id %d",
                       ecm_ctx->enb_ue_s1ap_id,
@@ -773,6 +771,31 @@ bool nas::handle_detach_request(uint32_t                m_tmsi,
   emm_ctx_t* emm_ctx = &nas_ctx->m_emm_ctx;
   ecm_ctx_t* ecm_ctx = &nas_ctx->m_ecm_ctx;
   sec_ctx_t* sec_ctx = &nas_ctx->m_sec_ctx;
+
+  // TS 24.301, Sec 5.5.2.2.1, UE initiated detach request
+  if (detach_req.detach_type.switch_off == 0) {
+    // UE expects detach accept
+    srsran::unique_byte_buffer_t nas_tx = srsran::make_byte_buffer();
+    if (nas_tx == nullptr) {
+      nas_logger.error("Couldn't allocate PDU in %s().", __FUNCTION__);
+      return false;
+    }
+
+    LIBLTE_MME_DETACH_ACCEPT_MSG_STRUCT detach_accept = {};
+    err                                               = liblte_mme_pack_detach_accept_msg(&detach_accept,
+                                            LIBLTE_MME_SECURITY_HDR_TYPE_PLAIN_NAS,
+                                            sec_ctx->dl_nas_count,
+                                            (LIBLTE_BYTE_MSG_STRUCT*)nas_tx.get());
+    if (err != LIBLTE_SUCCESS) {
+      nas_logger.error("Error packing Detach Accept\n");
+    }
+
+    nas_logger.info("Sending detach accept.\n");
+    sec_ctx->dl_nas_count++;
+    s1ap->send_downlink_nas_transport(enb_ue_s1ap_id, s1ap->get_next_mme_ue_s1ap_id(), nas_tx.get(), *enb_sri);
+  } else {
+    nas_logger.info("UE is switched off\n");
+  }
 
   gtpc->send_delete_session_request(emm_ctx->imsi);
   emm_ctx->state = EMM_STATE_DEREGISTERED;
@@ -939,8 +962,8 @@ bool nas::handle_attach_request(srsran::byte_buffer_t* nas_rx)
     m_s1ap->send_downlink_nas_transport(
         m_ecm_ctx.enb_ue_s1ap_id, m_ecm_ctx.mme_ue_s1ap_id, nas_tx.get(), m_ecm_ctx.enb_sri);
 
-    m_logger.info("Downlink NAS: Sending Authentication Request");
-    srsran::console("Downlink NAS: Sending Authentication Request\n");
+    m_logger.info("DL NAS: Sending Authentication Request");
+    srsran::console("DL NAS: Sending Authentication Request\n");
     return true;
   } else {
     m_logger.error("Attach request from known UE");
@@ -948,10 +971,51 @@ bool nas::handle_attach_request(srsran::byte_buffer_t* nas_rx)
   return true;
 }
 
+bool nas::handle_pdn_connectivity_request(srsran::byte_buffer_t* nas_rx)
+{
+  LIBLTE_MME_PDN_CONNECTIVITY_REQUEST_MSG_STRUCT pdn_con_req = {};
+
+  // Get PDN connectivity request messages
+  LIBLTE_ERROR_ENUM err =
+      liblte_mme_unpack_pdn_connectivity_request_msg((LIBLTE_BYTE_MSG_STRUCT*)nas_rx->msg, &pdn_con_req);
+  if (err != LIBLTE_SUCCESS) {
+    m_logger.error("Error unpacking NAS PDN Connectivity Request. Error: %s", liblte_error_text[err]);
+    return false;
+  }
+
+  // Send PDN connectivity reject
+  srsran::unique_byte_buffer_t nas_tx = srsran::make_byte_buffer();
+  if (nas_tx == nullptr) {
+    m_logger.error("Couldn't allocate PDU in %s().", __FUNCTION__);
+    return false;
+  }
+
+  LIBLTE_MME_PDN_CONNECTIVITY_REJECT_MSG_STRUCT pdn_con_reject = {};
+  pdn_con_reject.eps_bearer_id                                 = pdn_con_req.eps_bearer_id;
+  pdn_con_reject.proc_transaction_id                           = pdn_con_req.proc_transaction_id;
+  pdn_con_reject.esm_cause                                     = LIBLTE_MME_ESM_CAUSE_SERVICE_OPTION_NOT_SUPPORTED;
+
+  err = liblte_mme_pack_pdn_connectivity_reject_msg(&pdn_con_reject, (LIBLTE_BYTE_MSG_STRUCT*)nas_tx.get());
+  if (err != LIBLTE_SUCCESS) {
+    m_logger.error("Error packing PDN connectivity reject");
+    srsran::console("Error packing PDN connectivity reject\n");
+    return false;
+  }
+
+  // Send reply to eNB
+  m_s1ap->send_downlink_nas_transport(
+      m_ecm_ctx.enb_ue_s1ap_id, m_ecm_ctx.mme_ue_s1ap_id, nas_tx.get(), m_ecm_ctx.enb_sri);
+
+  m_logger.info("DL NAS: Sending PDN Connectivity Reject");
+  srsran::console("DL NAS: Sending PDN Connectivity Reject\n");
+
+  return true;
+}
+
 bool nas::handle_authentication_response(srsran::byte_buffer_t* nas_rx)
 {
   LIBLTE_MME_AUTHENTICATION_RESPONSE_MSG_STRUCT auth_resp = {};
-  bool                                          ue_valid = true;
+  bool                                          ue_valid  = true;
 
   // Get NAS authentication response
   LIBLTE_ERROR_ENUM err = liblte_mme_unpack_authentication_response_msg((LIBLTE_BYTE_MSG_STRUCT*)nas_rx, &auth_resp);
@@ -1364,9 +1428,13 @@ bool nas::pack_security_mode_command(srsran::byte_buffer_t* nas_buffer)
   sm_cmd.ue_security_cap.gea_present = m_sec_ctx.ms_network_cap_present;
   memcpy(sm_cmd.ue_security_cap.gea, m_sec_ctx.ms_network_cap.gea, 8 * sizeof(bool));
 
-  sm_cmd.imeisv_req_present = false;
-  sm_cmd.nonce_ue_present   = false;
-  sm_cmd.nonce_mme_present  = false;
+  sm_cmd.imeisv_req_present = m_request_imeisv;
+  if (m_request_imeisv) {
+    sm_cmd.imeisv_req = LIBLTE_MME_IMEISV_REQUESTED;
+  }
+
+  sm_cmd.nonce_ue_present  = false;
+  sm_cmd.nonce_mme_present = false;
 
   uint8_t           sec_hdr_type = 3;
   LIBLTE_ERROR_ENUM err          = liblte_mme_pack_security_mode_command_msg(
@@ -1483,7 +1551,7 @@ bool nas::pack_attach_accept(srsran::byte_buffer_t* nas_buffer)
   attach_accept.lai_present = true;
   attach_accept.lai.mcc     = mcc;
   attach_accept.lai.mnc     = mnc;
-  attach_accept.lai.lac     = 001;
+  attach_accept.lai.lac     = m_lac;
 
   attach_accept.ms_id_present    = true;
   attach_accept.ms_id.type_of_id = LIBLTE_MME_MOBILE_ID_TYPE_TMSI;
@@ -1522,7 +1590,12 @@ bool nas::pack_attach_accept(srsran::byte_buffer_t* nas_buffer)
   act_def_eps_bearer_context_req.protocol_cnfg_opts.opt[0].len = 4;
 
   struct sockaddr_in dns_addr;
-  inet_pton(AF_INET, m_dns.c_str(), &(dns_addr.sin_addr));
+  if (inet_pton(AF_INET, m_dns.c_str(), &(dns_addr.sin_addr)) != 1) {
+    m_logger.error("Invalid m_dns: %s", m_dns.c_str());
+    srsran::console("Invalid m_dns: %s\n", m_dns.c_str());
+    perror("inet_pton");
+    return false;
+  }
   memcpy(act_def_eps_bearer_context_req.protocol_cnfg_opts.opt[0].contents, &dns_addr.sin_addr.s_addr, 4);
 
   // Make sure all unused options are set to false
@@ -1680,12 +1753,14 @@ bool nas::short_integrity_check(srsran::byte_buffer_t* pdu)
     return false;
   }
 
+  uint32_t estimated_count = (m_sec_ctx.ul_nas_count & 0xffffffe0) | (pdu->msg[1] & 0x1f);
+
   switch (m_sec_ctx.integ_algo) {
     case srsran::INTEGRITY_ALGORITHM_ID_EIA0:
       break;
     case srsran::INTEGRITY_ALGORITHM_ID_128_EIA1:
       srsran::security_128_eia1(&m_sec_ctx.k_nas_int[16],
-                                m_sec_ctx.ul_nas_count,
+                                estimated_count,
                                 0,
                                 srsran::SECURITY_DIRECTION_UPLINK,
                                 &pdu->msg[0],
@@ -1694,7 +1769,7 @@ bool nas::short_integrity_check(srsran::byte_buffer_t* pdu)
       break;
     case srsran::INTEGRITY_ALGORITHM_ID_128_EIA2:
       srsran::security_128_eia2(&m_sec_ctx.k_nas_int[16],
-                                m_sec_ctx.ul_nas_count,
+                                estimated_count,
                                 0,
                                 srsran::SECURITY_DIRECTION_UPLINK,
                                 &pdu->msg[0],
@@ -1703,7 +1778,7 @@ bool nas::short_integrity_check(srsran::byte_buffer_t* pdu)
       break;
     case srsran::INTEGRITY_ALGORITHM_ID_128_EIA3:
       srsran::security_128_eia3(&m_sec_ctx.k_nas_int[16],
-                                m_sec_ctx.ul_nas_count,
+                                estimated_count,
                                 0,
                                 srsran::SECURITY_DIRECTION_UPLINK,
                                 &pdu->msg[0],
@@ -1713,12 +1788,13 @@ bool nas::short_integrity_check(srsran::byte_buffer_t* pdu)
     default:
       break;
   }
+
   // Check if expected mac equals the sent mac
   for (i = 0; i < 2; i++) {
     if (exp_mac[i + 2] != mac[i]) {
       m_logger.warning("Short integrity check failure. Local: count=%d, [%02x %02x %02x %02x], "
                        "Received: count=%d, [%02x %02x]",
-                       m_sec_ctx.ul_nas_count,
+                       estimated_count,
                        exp_mac[0],
                        exp_mac[1],
                        exp_mac[2],
@@ -1729,11 +1805,13 @@ bool nas::short_integrity_check(srsran::byte_buffer_t* pdu)
       return false;
     }
   }
+
   m_logger.info("Integrity check ok. Local: count=%d, Received: count=%d", m_sec_ctx.ul_nas_count, pdu->msg[1] & 0x1F);
+  m_sec_ctx.ul_nas_count = estimated_count;
   return true;
 }
 
-bool nas::integrity_check(srsran::byte_buffer_t* pdu)
+bool nas::integrity_check(srsran::byte_buffer_t* pdu, bool warn_failure)
 {
   uint8_t        exp_mac[4] = {};
   const uint8_t* mac        = &pdu->msg[1];
@@ -1776,20 +1854,21 @@ bool nas::integrity_check(srsran::byte_buffer_t* pdu)
   // Check if expected mac equals the sent mac
   for (int i = 0; i < 4; i++) {
     if (exp_mac[i] != mac[i]) {
-      m_logger.warning("Integrity check failure. Algorithm=EIA%d", (int)m_sec_ctx.integ_algo);
-      m_logger.warning("UL Local: est_count=%d, old_count=%d, MAC=[%02x %02x %02x %02x], "
-                       "Received: UL count=%d, MAC=[%02x %02x %02x %02x]",
-                       estimated_count,
-                       m_sec_ctx.ul_nas_count,
-                       exp_mac[0],
-                       exp_mac[1],
-                       exp_mac[2],
-                       exp_mac[3],
-                       pdu->msg[5],
-                       mac[0],
-                       mac[1],
-                       mac[2],
-                       mac[3]);
+      srslog::log_channel& channel = warn_failure ? m_logger.warning : m_logger.info;
+      channel("Integrity check failure. Algorithm=EIA%d", (int)m_sec_ctx.integ_algo);
+      channel("UL Local: est_count=%d, old_count=%d, MAC=[%02x %02x %02x %02x], "
+              "Received: UL count=%d, MAC=[%02x %02x %02x %02x]",
+              estimated_count,
+              m_sec_ctx.ul_nas_count,
+              exp_mac[0],
+              exp_mac[1],
+              exp_mac[2],
+              exp_mac[3],
+              pdu->msg[5],
+              mac[0],
+              mac[1],
+              mac[2],
+              mac[3]);
       return false;
     }
   }

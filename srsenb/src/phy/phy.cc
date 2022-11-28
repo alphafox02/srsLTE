@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -19,16 +19,16 @@
  *
  */
 
+#include "srsenb/hdr/phy/phy.h"
+#include "srsran/common/band_helper.h"
+#include "srsran/common/phy_cfg_nr_default.h"
+#include "srsran/common/threads.h"
 #include <pthread.h>
 #include <sstream>
 #include <string.h>
 #include <string>
 #include <strings.h>
-#include <sys/mman.h>
 #include <unistd.h>
-
-#include "srsenb/hdr/phy/phy.h"
-#include "srsran/common/threads.h"
 
 #define Error(fmt, ...)                                                                                                \
   if (SRSRAN_DEBUG_ENABLED)                                                                                            \
@@ -76,7 +76,6 @@ phy::phy(srslog::sink& log_sink) :
   phy_log(srslog::fetch_basic_logger("PHY", log_sink)),
   phy_lib_log(srslog::fetch_basic_logger("PHY_LIB", log_sink)),
   lte_workers(MAX_WORKERS),
-  nr_workers(MAX_WORKERS),
   workers_common(),
   nof_workers(0),
   tx_rx(phy_log)
@@ -95,7 +94,7 @@ void phy::parse_common_config(const phy_cfg_t& cfg)
   prach_cfg.root_seq_idx     = cfg.prach_cnfg.root_seq_idx;
   prach_cfg.zero_corr_zone   = cfg.prach_cnfg.prach_cfg_info.zero_correlation_zone_cfg;
   prach_cfg.freq_offset      = cfg.prach_cnfg.prach_cfg_info.prach_freq_offset;
-  prach_cfg.num_ra_preambles = cfg.phy_cell_cfg.at(0).num_ra_preambles;
+  prach_cfg.num_ra_preambles = cfg.phy_cell_cfg.empty() ? 0 : cfg.phy_cell_cfg.at(0).num_ra_preambles;
   // DMRS
   workers_common.dmrs_pusch_cfg.cyclic_shift        = cfg.pusch_cnfg.ul_ref_sigs_pusch.cyclic_shift;
   workers_common.dmrs_pusch_cfg.delta_ss            = cfg.pusch_cnfg.ul_ref_sigs_pusch.group_assign_pusch;
@@ -106,7 +105,48 @@ void phy::parse_common_config(const phy_cfg_t& cfg)
 int phy::init(const phy_args_t&            args,
               const phy_cfg_t&             cfg,
               srsran::radio_interface_phy* radio_,
-              stack_interface_phy_lte*     stack_)
+              stack_interface_phy_lte*     stack_lte_,
+              stack_interface_phy_nr&      stack_nr_,
+              enb_time_interface*          enb_)
+{
+  if (init_lte(args, cfg, radio_, stack_lte_, enb_) != SRSRAN_SUCCESS) {
+    phy_log.error("Couldn't initialize LTE PHY");
+    return SRSRAN_ERROR;
+  }
+
+  if (init_nr(args, cfg, stack_nr_) != SRSRAN_SUCCESS) {
+    phy_log.error("Couldn't initialize NR PHY");
+    return SRSRAN_ERROR;
+  }
+
+  tx_rx.init(enb_, radio, &lte_workers, &workers_common, &prach, SF_RECV_THREAD_PRIO);
+  initialized = true;
+
+  return SRSRAN_SUCCESS;
+}
+
+int phy::init(const phy_args_t&            args,
+              const phy_cfg_t&             cfg,
+              srsran::radio_interface_phy* radio_,
+              stack_interface_phy_lte*     stack_lte_,
+              enb_time_interface*          enb_)
+{
+  if (init_lte(args, cfg, radio_, stack_lte_, enb_) != SRSRAN_SUCCESS) {
+    phy_log.error("Couldn't initialize LTE PHY");
+    return SRSRAN_ERROR;
+  }
+
+  tx_rx.init(enb_, radio, &lte_workers, &workers_common, &prach, SF_RECV_THREAD_PRIO);
+  initialized = true;
+
+  return SRSRAN_SUCCESS;
+}
+
+int phy::init_lte(const phy_args_t&            args,
+                  const phy_cfg_t&             cfg,
+                  srsran::radio_interface_phy* radio_,
+                  stack_interface_phy_lte*     stack_lte_,
+                  enb_time_interface*          enb_)
 {
   if (cfg.phy_cell_cfg.size() > SRSRAN_MAX_CARRIERS) {
     phy_log.error(
@@ -114,12 +154,11 @@ int phy::init(const phy_args_t&            args,
     return SRSRAN_ERROR;
   }
 
-  mlockall((uint32_t)MCL_CURRENT | (uint32_t)MCL_FUTURE);
-
   // Add PHY lib log.
-  srslog::basic_levels log_lvl = srslog::str_to_basic_level(args.log.phy_lib_level);
+  srslog::basic_levels lib_log_lvl = srslog::str_to_basic_level(args.log.phy_lib_level);
+  srslog::basic_levels log_lvl     = srslog::str_to_basic_level(args.log.phy_level);
 
-  phy_lib_log.set_level(log_lvl);
+  phy_lib_log.set_level(lib_log_lvl);
   phy_lib_log.set_hex_dump_max_size(args.log.phy_hex_limit);
   if (log_lvl != srslog::basic_levels::none) {
     srsran_phy_log_register_handler(this, srsran_phy_handler);
@@ -130,11 +169,14 @@ int phy::init(const phy_args_t&            args,
   phy_log.set_hex_dump_max_size(args.log.phy_hex_limit);
 
   radio       = radio_;
-  nof_workers = args.nof_phy_threads;
+  nof_workers = cfg.phy_cell_cfg.empty() ? 0 : args.nof_phy_threads;
 
   workers_common.params = args;
 
-  workers_common.init(cfg.phy_cell_cfg, cfg.phy_cell_cfg_nr, radio, stack_);
+  workers_common.init(cfg.phy_cell_cfg, cfg.phy_cell_cfg_nr, radio, stack_lte_);
+  if (cfg.cfr_config.cfr_enable) {
+    workers_common.set_cfr_config(cfg.cfr_config);
+  }
 
   parse_common_config(cfg);
 
@@ -142,22 +184,19 @@ int phy::init(const phy_args_t&            args,
   if (not cfg.phy_cell_cfg.empty()) {
     lte_workers.init(args, &workers_common, log_sink, WORKERS_THREAD_PRIO);
   }
-  if (not cfg.phy_cell_cfg_nr.empty()) {
-    nr_workers.init(args, &workers_common, log_sink, WORKERS_THREAD_PRIO);
-  }
 
   // For each carrier, initialise PRACH worker
   for (uint32_t cc = 0; cc < cfg.phy_cell_cfg.size(); cc++) {
     prach_cfg.root_seq_idx = cfg.phy_cell_cfg[cc].root_seq_idx;
-    prach.init(
-        cc, cfg.phy_cell_cfg[cc].cell, prach_cfg, stack_, phy_log, PRACH_WORKER_THREAD_PRIO, args.nof_prach_threads);
+    prach.init(cc,
+               cfg.phy_cell_cfg[cc].cell,
+               prach_cfg,
+               stack_lte_,
+               phy_log,
+               PRACH_WORKER_THREAD_PRIO,
+               args.nof_prach_threads);
   }
   prach.set_max_prach_offset_us(args.max_prach_offset_us);
-
-  // Warning this must be initialized after all workers have been added to the pool
-  tx_rx.init(stack_, radio, &lte_workers, &nr_workers, &workers_common, &prach, SF_RECV_THREAD_PRIO);
-
-  initialized = true;
 
   return SRSRAN_SUCCESS;
 }
@@ -168,7 +207,9 @@ void phy::stop()
     tx_rx.stop();
     workers_common.stop();
     lte_workers.stop();
-    nr_workers.stop();
+    if (nr_workers != nullptr) {
+      nr_workers->stop();
+    }
     prach.stop();
 
     initialized = false;
@@ -220,20 +261,28 @@ void phy::get_metrics(std::vector<phy_metrics_t>& metrics)
       metrics[j].ul.n_samples_pucch += metrics_tmp[j].ul.n_samples_pucch;
       metrics[j].ul.mcs += metrics_tmp[j].ul.n_samples * metrics_tmp[j].ul.mcs;
       metrics[j].ul.n += metrics_tmp[j].ul.n_samples * metrics_tmp[j].ul.n;
-      metrics[j].ul.rssi += metrics_tmp[j].ul.n_samples * metrics_tmp[j].ul.rssi;
+      metrics[j].ul.pusch_rssi += metrics_tmp[j].ul.n_samples * metrics_tmp[j].ul.pusch_rssi;
       metrics[j].ul.pusch_sinr += metrics_tmp[j].ul.n_samples * metrics_tmp[j].ul.pusch_sinr;
+      metrics[j].ul.pucch_rssi += metrics_tmp[j].ul.n_samples_pucch * metrics_tmp[j].ul.pucch_rssi;
+      metrics[j].ul.pucch_ni += metrics_tmp[j].ul.n_samples_pucch * metrics_tmp[j].ul.pucch_ni;
       metrics[j].ul.pucch_sinr += metrics_tmp[j].ul.n_samples_pucch * metrics_tmp[j].ul.pucch_sinr;
       metrics[j].ul.turbo_iters += metrics_tmp[j].ul.n_samples * metrics_tmp[j].ul.turbo_iters;
     }
   }
   for (uint32_t j = 0; j < metrics.size(); j++) {
-    metrics[j].dl.mcs /= metrics[j].dl.n_samples;
-    metrics[j].ul.mcs /= metrics[j].ul.n_samples;
-    metrics[j].ul.n /= metrics[j].ul.n_samples;
-    metrics[j].ul.rssi /= metrics[j].ul.n_samples;
-    metrics[j].ul.pusch_sinr /= metrics[j].ul.n_samples;
-    metrics[j].ul.pucch_sinr /= metrics[j].ul.n_samples_pucch;
-    metrics[j].ul.turbo_iters /= metrics[j].ul.n_samples;
+    if (metrics[j].dl.n_samples > 0) {
+      metrics[j].dl.mcs /= metrics[j].dl.n_samples;
+    }
+    if (metrics[j].ul.n_samples > 0) {
+      metrics[j].ul.mcs /= metrics[j].ul.n_samples;
+      metrics[j].ul.n /= metrics[j].ul.n_samples;
+      metrics[j].ul.pusch_rssi /= metrics[j].ul.n_samples;
+      metrics[j].ul.pusch_sinr /= metrics[j].ul.n_samples;
+      metrics[j].ul.pucch_rssi /= metrics[j].ul.n_samples_pucch;
+      metrics[j].ul.pucch_ni /= metrics[j].ul.n_samples_pucch;
+      metrics[j].ul.pucch_sinr /= metrics[j].ul.n_samples_pucch;
+      metrics[j].ul.turbo_iters /= metrics[j].ul.n_samples;
+    }
   }
 }
 
@@ -241,6 +290,11 @@ void phy::cmd_cell_gain(uint32_t cell_id, float gain_db)
 {
   Info("set_cell_gain: cell_id=%d, gain_db=%.2f", cell_id, gain_db);
   workers_common.set_cell_gain(cell_id, gain_db);
+}
+
+void phy::cmd_cell_measure()
+{
+  workers_common.set_cell_measure_trigger();
 }
 
 /***** RRC->PHY interface **********/
@@ -304,7 +358,48 @@ void phy::configure_mbsfn(srsran::sib2_mbms_t* sib2, srsran::sib13_t* sib13, con
 // Start GUI
 void phy::start_plot()
 {
-  lte_workers[0]->start_plot();
+  if (lte_workers.get_nof_workers() > 0) {
+    lte_workers[0]->start_plot();
+  }
+}
+
+int phy::init_nr(const phy_args_t& args, const phy_cfg_t& cfg, stack_interface_phy_nr& stack)
+{
+  if (cfg.phy_cell_cfg_nr.empty()) {
+    return SRSRAN_SUCCESS;
+  }
+
+  nr_workers = std::unique_ptr<nr::worker_pool>(new nr::worker_pool(workers_common, stack, log_sink, MAX_WORKERS));
+
+  nr::worker_pool::args_t worker_args = {};
+  worker_args.nof_phy_threads         = args.nof_phy_threads;
+  worker_args.log.phy_level           = args.log.phy_level;
+  worker_args.log.phy_hex_limit       = args.log.phy_hex_limit;
+  worker_args.pusch_max_its           = args.nr_pusch_max_its;
+
+  if (not nr_workers->init(worker_args, cfg.phy_cell_cfg_nr)) {
+    return SRSRAN_ERROR;
+  }
+
+  tx_rx.set_nr_workers(nr_workers.get());
+
+  if (nr_workers->set_common_cfg(common_cfg)) {
+    phy_log.error("Couldn't set common PHY config");
+    return SRSRAN_ERROR;
+  }
+
+  return SRSRAN_SUCCESS;
+}
+
+int phy::set_common_cfg(const phy_interface_rrc_nr::common_cfg_t& common_cfg_)
+{
+  if (nr_workers.get() == nullptr) {
+    // if nr_workers are not initialized yet, store the configuration in the phy
+    common_cfg = common_cfg_;
+    return SRSRAN_SUCCESS;
+  }
+
+  return nr_workers->set_common_cfg(common_cfg);
 }
 
 } // namespace srsenb

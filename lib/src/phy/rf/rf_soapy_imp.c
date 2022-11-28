@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -25,15 +25,18 @@
 #include <unistd.h>
 
 #include "rf_helper.h"
+#include "rf_plugin.h"
 #include "rf_soapy_imp.h"
-#include "srsran/srsran.h"
+#include "srsran/phy/common/phy_common.h"
+#include "srsran/phy/utils/debug.h"
+#include "srsran/phy/utils/vector.h"
 
 #include <SoapySDR/Device.h>
 #include <SoapySDR/Formats.h>
 #include <SoapySDR/Logger.h>
 #include <SoapySDR/Time.h>
+#include <SoapySDR/Types.h>
 #include <SoapySDR/Version.h>
-#include <Types.h>
 
 #define HAVE_ASYNC_THREAD 0
 
@@ -263,11 +266,15 @@ int rf_soapy_stop_tx_stream(void* h)
 void rf_soapy_flush_buffer(void* h)
 {
   int   n;
-  cf_t  tmp1[1024];
-  cf_t  tmp2[1024];
-  void* data[2] = {tmp1, tmp2};
+  cf_t  dummy[1024];
+  void* data[SRSRAN_MAX_CHANNELS] = {};
+
+  for (int i = 0; i < SRSRAN_MAX_CHANNELS; i++) {
+    data[i] = dummy;
+  }
+
   do {
-    n = rf_soapy_recv_with_time_multi(h, data, 1024, 0, NULL, NULL);
+    n = rf_soapy_recv_with_time_multi(h, data, sizeof(dummy), 0, NULL, NULL);
   } while (n > 0);
 }
 
@@ -855,7 +862,9 @@ int rf_soapy_recv_with_time_multi(void*    h,
 
 int rf_soapy_recv_with_time(void* h, void* data, uint32_t nsamples, bool blocking, time_t* secs, double* frac_secs)
 {
-  return rf_soapy_recv_with_time_multi(h, &data, nsamples, blocking, secs, frac_secs);
+  void* data_multi[SRSRAN_MAX_PORTS] = {NULL};
+  data_multi[0]                      = data;
+  return rf_soapy_recv_with_time_multi(h, data_multi, nsamples, blocking, secs, frac_secs);
 }
 
 int rf_soapy_send_timed(void*  h,
@@ -995,3 +1004,44 @@ int rf_soapy_send_timed_multi(void*  h,
 
   return n;
 }
+
+rf_dev_t srsran_rf_dev_soapy = {"soapy",
+                                rf_soapy_devname,
+                                rf_soapy_start_rx_stream,
+                                rf_soapy_stop_rx_stream,
+                                rf_soapy_flush_buffer,
+                                rf_soapy_has_rssi,
+                                rf_soapy_get_rssi,
+                                rf_soapy_suppress_stdout,
+                                rf_soapy_register_error_handler,
+                                rf_soapy_open,
+                                rf_soapy_open_multi,
+                                rf_soapy_close,
+                                rf_soapy_set_rx_srate,
+                                rf_soapy_set_rx_gain,
+                                rf_soapy_set_rx_gain_ch,
+                                rf_soapy_set_tx_gain,
+                                rf_soapy_set_tx_gain_ch,
+                                rf_soapy_get_rx_gain,
+                                rf_soapy_get_tx_gain,
+                                rf_soapy_get_info,
+                                rf_soapy_set_rx_freq,
+                                rf_soapy_set_tx_srate,
+                                rf_soapy_set_tx_freq,
+                                rf_soapy_get_time,
+                                NULL,
+                                rf_soapy_recv_with_time,
+                                rf_soapy_recv_with_time_multi,
+                                rf_soapy_send_timed,
+                                .srsran_rf_send_timed_multi = rf_soapy_send_timed_multi};
+
+#ifdef ENABLE_RF_PLUGINS
+int register_plugin(rf_dev_t** rf_api)
+{
+  if (rf_api == NULL) {
+    return SRSRAN_ERROR;
+  }
+  *rf_api = &srsran_rf_dev_soapy;
+  return SRSRAN_SUCCESS;
+}
+#endif /* ENABLE_RF_PLUGINS */

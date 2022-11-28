@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -616,6 +616,7 @@ int regs_num_x_symbol(uint32_t symbol, uint32_t nof_port, srsran_cp_t cp)
       ERROR("Invalid symbol %d", symbol);
       return SRSRAN_ERROR;
   }
+  return SRSRAN_ERROR;
 }
 
 /**

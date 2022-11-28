@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -41,7 +41,7 @@
 #include <numeric>
 #include <string.h>
 
-bool simulate_rlf = false;
+std::atomic<bool> simulate_rlf{false};
 
 using namespace srsran;
 using namespace asn1::rrc;
@@ -62,7 +62,6 @@ rrc::rrc(stack_interface_rrc* stack_, srsran::task_sched_handle task_sched_) :
   task_sched(task_sched_),
   state(RRC_STATE_IDLE),
   last_state(RRC_STATE_CONNECTED),
-  drb_up(false),
   logger(srslog::fetch_basic_logger("RRC")),
   measurements(new rrc_meas()),
   cell_searcher(this),
@@ -75,6 +74,7 @@ rrc::rrc(stack_interface_rrc* stack_, srsran::task_sched_handle task_sched_) :
   plmn_searcher(this),
   cell_reselector(this),
   connection_reest(this),
+  conn_setup_proc(this),
   ho_handler(this),
   conn_recfg_proc(this),
   meas_cells_nr(task_sched_),
@@ -148,6 +148,8 @@ void rrc::init(phy_interface_rrc_lte* phy_,
   t311 = task_sched.get_unique_timer();
   t304 = task_sched.get_unique_timer();
 
+  var_rlf_report.init(task_sched);
+
   transaction_id = 0;
 
   cell_clean_cnt = 0;
@@ -199,11 +201,6 @@ bool rrc::is_connected()
   return (RRC_STATE_CONNECTED == state);
 }
 
-bool rrc::have_drb()
-{
-  return drb_up;
-}
-
 /*
  *
  * RRC State Machine
@@ -215,9 +212,9 @@ void rrc::run_tti()
     return;
   }
 
-  if (simulate_rlf) {
+  if (simulate_rlf.load(std::memory_order_relaxed)) {
     radio_link_failure_process();
-    simulate_rlf = false;
+    simulate_rlf.store(false, std::memory_order_relaxed);
   }
 
   // Process pending PHY measurements in IDLE/CONNECTED
@@ -373,6 +370,9 @@ void rrc::set_config_complete(bool status)
 {
   // Signal Reconfiguration Procedure that PHY configuration has completed
   phy_ctrl->set_config_complete();
+  if (conn_setup_proc.is_busy()) {
+    conn_setup_proc.trigger(status);
+  }
   if (conn_recfg_proc.is_busy()) {
     conn_recfg_proc.trigger(status);
   }
@@ -466,7 +466,8 @@ void rrc::process_new_cell_meas(const std::vector<phy_meas_t>& meas)
   bool neighbour_added = meas_cells.process_new_cell_meas(meas, filter);
 
   // Instruct measurements subclass to update phy with new cells to measure based on strongest neighbours
-  if (state == RRC_STATE_CONNECTED && neighbour_added) {
+  // Avoid updating PHY while HO procedure is busy
+  if (state == RRC_STATE_CONNECTED && neighbour_added && !ho_handler.is_busy()) {
     measurements->update_phy();
   }
 }
@@ -685,6 +686,9 @@ void rrc::radio_link_failure_process()
   // TODO: Generate and store failure report
   srsran::console("Warning: Detected Radio-Link Failure\n");
 
+  // Store the information in VarRLF-Report
+  var_rlf_report.set_failure(meas_cells, rrc_rlf_report::rlf);
+
   if (state == RRC_STATE_CONNECTED) {
     if (security_is_activated) {
       logger.info("Detected Radio-Link Failure with active AS security. Starting ConnectionReestablishment...");
@@ -722,6 +726,11 @@ void rrc::max_retx_attempted()
   // TODO: Handle the radio link failure
   logger.warning("Max RLC reTx attempted. Starting RLF");
   radio_link_failure_push_cmd();
+}
+
+void rrc::protocol_failure()
+{
+  logger.warning("RLC protocol failure detected");
 }
 
 void rrc::timer_expired(uint32_t timeout_id)
@@ -780,13 +789,10 @@ bool rrc::nr_reconfiguration_proc(const rrc_conn_recfg_r8_ies_s& rx_recfg, bool*
     return true;
   }
 
-  bool                endc_release_and_add_r15                = false;
-  bool                nr_secondary_cell_group_cfg_r15_present = false;
-  asn1::dyn_octstring nr_secondary_cell_group_cfg_r15;
-  bool                sk_counter_r15_present           = false;
-  uint32_t            sk_counter_r15                   = 0;
-  bool                nr_radio_bearer_cfg1_r15_present = false;
-  asn1::dyn_octstring nr_radio_bearer_cfg1_r15;
+  bool endc_release_and_add_r15 = false;
+
+  asn1::rrc_nr::rrc_recfg_s rrc_nr_reconf = {};
+  rrc_nr_reconf.crit_exts.set_rrc_recfg();
 
   switch (rrc_conn_recfg_v1510_ies->nr_cfg_r15.type()) {
     case setup_opts::options::release:
@@ -795,8 +801,28 @@ bool rrc::nr_reconfiguration_proc(const rrc_conn_recfg_r8_ies_s& rx_recfg, bool*
     case setup_opts::options::setup:
       endc_release_and_add_r15 = rrc_conn_recfg_v1510_ies->nr_cfg_r15.setup().endc_release_and_add_r15;
       if (rrc_conn_recfg_v1510_ies->nr_cfg_r15.setup().nr_secondary_cell_group_cfg_r15_present) {
-        nr_secondary_cell_group_cfg_r15_present = true;
-        nr_secondary_cell_group_cfg_r15 = rrc_conn_recfg_v1510_ies->nr_cfg_r15.setup().nr_secondary_cell_group_cfg_r15;
+        asn1::cbit_ref bref0(rrc_conn_recfg_v1510_ies->nr_cfg_r15.setup().nr_secondary_cell_group_cfg_r15.data(),
+                             rrc_conn_recfg_v1510_ies->nr_cfg_r15.setup().nr_secondary_cell_group_cfg_r15.size());
+
+        asn1::rrc_nr::rrc_recfg_s secondary_cell_group_r15;
+        if (secondary_cell_group_r15.unpack(bref0) != SRSASN_SUCCESS) {
+          logger.error("Could not unpack secondary cell group r15.");
+          return false;
+        }
+
+        if (secondary_cell_group_r15.crit_exts.rrc_recfg().secondary_cell_group.size() > 0) {
+          asn1::cbit_ref bref1(secondary_cell_group_r15.crit_exts.rrc_recfg().secondary_cell_group.data(),
+                               secondary_cell_group_r15.crit_exts.rrc_recfg().secondary_cell_group.size());
+
+          asn1::rrc_nr::cell_group_cfg_s cell_group_cfg;
+          if (cell_group_cfg.unpack(bref1) != SRSASN_SUCCESS) {
+            logger.error("Could not unpack secondary cell group config.");
+            return false;
+          }
+
+          rrc_nr_reconf.crit_exts.rrc_recfg().secondary_cell_group =
+              secondary_cell_group_r15.crit_exts.rrc_recfg().secondary_cell_group;
+        }
       }
       break;
     default:
@@ -804,22 +830,29 @@ bool rrc::nr_reconfiguration_proc(const rrc_conn_recfg_r8_ies_s& rx_recfg, bool*
       break;
   }
   if (rrc_conn_recfg_v1510_ies->sk_counter_r15_present) {
-    sk_counter_r15_present = true;
-    sk_counter_r15         = rrc_conn_recfg_v1510_ies->sk_counter_r15;
+    rrc_nr_reconf.crit_exts.rrc_recfg().non_crit_ext_present                                      = true;
+    rrc_nr_reconf.crit_exts.rrc_recfg().non_crit_ext.non_crit_ext_present                         = true;
+    rrc_nr_reconf.crit_exts.rrc_recfg().non_crit_ext.non_crit_ext.non_crit_ext_present            = true;
+    rrc_nr_reconf.crit_exts.rrc_recfg().non_crit_ext.non_crit_ext.non_crit_ext.sk_counter_present = true;
+    rrc_nr_reconf.crit_exts.rrc_recfg().non_crit_ext.non_crit_ext.non_crit_ext.sk_counter =
+        rrc_conn_recfg_v1510_ies->sk_counter_r15;
   }
 
   if (rrc_conn_recfg_v1510_ies->nr_radio_bearer_cfg1_r15_present) {
-    nr_radio_bearer_cfg1_r15_present = true;
-    nr_radio_bearer_cfg1_r15         = rrc_conn_recfg_v1510_ies->nr_radio_bearer_cfg1_r15;
+    rrc_nr_reconf.crit_exts.rrc_recfg().radio_bearer_cfg_present = true;
+    asn1::rrc_nr::radio_bearer_cfg_s radio_bearer_conf           = {};
+    asn1::cbit_ref                   bref(rrc_conn_recfg_v1510_ies->nr_radio_bearer_cfg1_r15.data(),
+                        rrc_conn_recfg_v1510_ies->nr_radio_bearer_cfg1_r15.size());
+    if (radio_bearer_conf.unpack(bref) != SRSASN_SUCCESS) {
+      logger.error("Could not unpack radio bearer config.");
+      return false;
+    }
+
+    rrc_nr_reconf.crit_exts.rrc_recfg().radio_bearer_cfg = radio_bearer_conf;
   }
   *has_5g_nr_reconfig = true;
-  return rrc_nr->rrc_reconfiguration(endc_release_and_add_r15,
-                                     nr_secondary_cell_group_cfg_r15_present,
-                                     nr_secondary_cell_group_cfg_r15,
-                                     sk_counter_r15_present,
-                                     sk_counter_r15,
-                                     nr_radio_bearer_cfg1_r15_present,
-                                     nr_radio_bearer_cfg1_r15);
+
+  return rrc_nr->rrc_reconfiguration(endc_release_and_add_r15, rrc_nr_reconf);
 }
 /*******************************************************************************
  *
@@ -862,6 +895,9 @@ void rrc::send_con_restablish_request(reest_cause_e cause, uint16_t crnti, uint1
 {
   // Clean reestablishment type
   reestablishment_successful = false;
+
+  // set the reestablishmentCellId in the VarRLF-Report to the global cell identity of the selected cell;
+  var_rlf_report.set_reest_gci(meas_cells.serving_cell().get_cell_id_bit(), meas_cells.serving_cell().get_plmn_asn1(0));
 
   if (cause.value != reest_cause_opts::ho_fail) {
     if (cause.value != reest_cause_opts::other_fail) {
@@ -951,6 +987,15 @@ void rrc::send_con_restablish_complete()
   ul_dcch_msg.msg.set_c1().set_rrc_conn_reest_complete().crit_exts.set_rrc_conn_reest_complete_r8();
   ul_dcch_msg.msg.c1().rrc_conn_reest_complete().rrc_transaction_id = transaction_id;
 
+  // Include rlf-InfoAvailable
+  if (var_rlf_report.has_info()) {
+    ul_dcch_msg.msg.c1().rrc_conn_reest_complete().crit_exts.rrc_conn_reest_complete_r8().non_crit_ext_present = true;
+    ul_dcch_msg.msg.c1()
+        .rrc_conn_reest_complete()
+        .crit_exts.rrc_conn_reest_complete_r8()
+        .non_crit_ext.rlf_info_available_r9_present = true;
+  }
+
   send_ul_dcch_msg(srb_to_lcid(lte_srb::srb1), ul_dcch_msg);
 
   reestablishment_successful = true;
@@ -966,6 +1011,13 @@ void rrc::send_con_setup_complete(srsran::unique_byte_buffer_t nas_msg)
       &ul_dcch_msg.msg.set_c1().set_rrc_conn_setup_complete().crit_exts.set_c1().set_rrc_conn_setup_complete_r8();
 
   ul_dcch_msg.msg.c1().rrc_conn_setup_complete().rrc_transaction_id = transaction_id;
+
+  // Include rlf-InfoAvailable
+  if (var_rlf_report.has_info()) {
+    rrc_conn_setup_complete->non_crit_ext_present                                     = true;
+    rrc_conn_setup_complete->non_crit_ext.non_crit_ext_present                        = true;
+    rrc_conn_setup_complete->non_crit_ext.non_crit_ext.rlf_info_available_r10_present = true;
+  }
 
   rrc_conn_setup_complete->sel_plmn_id = 1;
   rrc_conn_setup_complete->ded_info_nas.resize(nas_msg->N_bytes);
@@ -1010,6 +1062,13 @@ void rrc::send_rrc_con_reconfig_complete(bool contains_nr_complete)
   rrc_conn_recfg_complete_r8_ies_s* rrc_conn_recfg_complete_r8 =
       &ul_dcch_msg.msg.set_c1().set_rrc_conn_recfg_complete().crit_exts.set_rrc_conn_recfg_complete_r8();
   ul_dcch_msg.msg.c1().rrc_conn_recfg_complete().rrc_transaction_id = transaction_id;
+
+  // Include rlf-InfoAvailable
+  if (var_rlf_report.has_info()) {
+    rrc_conn_recfg_complete_r8->non_crit_ext_present                                     = true;
+    rrc_conn_recfg_complete_r8->non_crit_ext.non_crit_ext_present                        = true;
+    rrc_conn_recfg_complete_r8->non_crit_ext.non_crit_ext.rlf_info_available_r10_present = true;
+  }
 
   if (contains_nr_complete == true) {
     logger.debug("Preparing RRC Connection Reconfig Complete with NR Complete");
@@ -1061,6 +1120,10 @@ void rrc::start_go_idle()
 void rrc::ho_failed()
 {
   ho_handler.trigger(ho_proc::t304_expiry{});
+
+  // Store the information in VarRLF-Report
+  var_rlf_report.set_failure(meas_cells, rrc_rlf_report::hof);
+
   start_con_restablishment(reest_cause_e::ho_fail);
 }
 
@@ -1100,11 +1163,48 @@ void rrc::handle_rrc_con_reconfig(uint32_t lcid, const rrc_conn_recfg_s& reconfi
 }
 
 /* Actions upon reception of RRCConnectionRelease 5.3.8.3 */
-void rrc::rrc_connection_release(const std::string& cause)
+void rrc::handle_rrc_connection_release(const asn1::rrc::rrc_conn_release_s& release)
 {
+  std::string cause = release.crit_exts.c1().rrc_conn_release_r8().release_cause.to_string();
   // Save idleModeMobilityControlInfo, etc.
   srsran::console("Received RRC Connection Release (releaseCause: %s)\n", cause.c_str());
-  start_go_idle();
+
+  if (has_nr_dc()) {
+    rrc_nr->rrc_release();
+  }
+
+  // delay actions by 60ms as per 5.3.8.3
+  task_sched.defer_callback(60, [this]() { start_go_idle(); });
+
+  uint32_t earfcn = 0;
+  if (release.crit_exts.c1().rrc_conn_release_r8().redirected_carrier_info_present) {
+    switch (release.crit_exts.c1().rrc_conn_release_r8().redirected_carrier_info.type()) {
+      case asn1::rrc::redirected_carrier_info_c::types_opts::options::eutra:
+        earfcn = release.crit_exts.c1().rrc_conn_release_r8().redirected_carrier_info.eutra();
+        break;
+      default:
+        srsran::console("Ignoring RedirectedCarrierInfo with unsupported type (%s)\n",
+                        release.crit_exts.c1().rrc_conn_release_r8().redirected_carrier_info.type().to_string());
+        break;
+    }
+    if (earfcn != 0) {
+      srsran::console("RedirectedCarrierInfo present (type %s, earfcn: %d) - Redirecting\n",
+                      release.crit_exts.c1().rrc_conn_release_r8().redirected_carrier_info.type().to_string(),
+                      earfcn);
+      logger.info("RedirectedCarrierInfo present (type %s, earfcn: %d) - Redirecting",
+                  release.crit_exts.c1().rrc_conn_release_r8().redirected_carrier_info.type().to_string(),
+                  earfcn);
+
+      // delay actions by 60ms as per 5.3.8.3
+      task_sched.defer_callback(60, [this, earfcn]() { start_rrc_redirect(earfcn); });
+    }
+  }
+}
+
+void rrc::start_rrc_redirect(uint32_t new_dl_earfcn)
+{
+  cell_search_earfcn = (int)new_dl_earfcn;
+  plmn_search();
 }
 
 /// TS 36.331, 5.3.12 - UE actions upon leaving RRC_CONNECTED
@@ -1113,7 +1213,6 @@ void rrc::leave_connected()
   srsran::console("RRC IDLE\n");
   logger.info("Leaving RRC_CONNECTED state");
   state                 = RRC_STATE_IDLE;
-  drb_up                = false;
   security_is_activated = false;
 
   // 1> reset MAC;
@@ -1127,6 +1226,7 @@ void rrc::leave_connected()
   rlc->reset();
   pdcp->reset();
   set_mac_default();
+  stack->reset_eps_bearers();
 
   // 1> indicate the release of the RRC connection to upper layers together with the release cause;
   nas->left_rrc_connected();
@@ -1620,6 +1720,11 @@ void rrc::write_pdu(uint32_t lcid, unique_byte_buffer_t pdu)
   process_pdu(lcid, std::move(pdu));
 }
 
+void rrc::notify_pdcp_integrity_error(uint32_t lcid)
+{
+  logger.warning("Received integrity protection failure indication, lcid=%u", lcid);
+}
+
 void rrc::process_pdu(uint32_t lcid, srsran::unique_byte_buffer_t pdu)
 {
   logger.debug("RX PDU, LCID: %d", lcid);
@@ -1754,7 +1859,11 @@ void rrc::parse_dl_dcch(uint32_t lcid, unique_byte_buffer_t pdu)
       handle_ue_capability_enquiry(c1->ue_cap_enquiry());
       break;
     case dl_dcch_msg_type_c::c1_c_::types::rrc_conn_release:
-      rrc_connection_release(c1->rrc_conn_release().crit_exts.c1().rrc_conn_release_r8().release_cause.to_string());
+      handle_rrc_connection_release(c1->rrc_conn_release());
+      break;
+    case dl_dcch_msg_type_c::c1_c_::types::ue_info_request_r9:
+      transaction_id = c1->ue_info_request_r9().rrc_transaction_id;
+      handle_ue_info_request(c1->ue_info_request_r9());
       break;
     default:
       logger.error("The provided DL-CCCH message type is not recognized or supported");
@@ -1904,7 +2013,7 @@ void rrc::handle_ue_capability_enquiry(const ue_cap_enquiry_s& enquiry)
             ca_mimo_params_ul.supported_mimo_cap_ul_r10_present = false;
 
             band_params_r10_s band_params;
-            band_params.band_eutra_r10             = args.supported_bands[i];
+            band_params.band_eutra_r10             = args.supported_bands[k];
             band_params.band_params_dl_r10_present = true;
             band_params.band_params_dl_r10.push_back(ca_mimo_params_dl);
             band_params.band_params_ul_r10_present = true;
@@ -2070,24 +2179,34 @@ void rrc::handle_ue_capability_enquiry(const ue_cap_enquiry_s& enquiry)
         irat_params_nr_r15.en_dc_r15_present                     = true;
         irat_params_nr_r15.supported_band_list_en_dc_r15_present = true;
 
-        supported_band_nr_r15_s supported_band_nr_r15;
-        supported_band_nr_r15.band_nr_r15 = 78;
+        uint32_t nof_supported_nr_bands = args.supported_bands_nr.size();
+        irat_params_nr_r15.supported_band_list_en_dc_r15.resize(nof_supported_nr_bands);
+        for (uint32_t k = 0; k < nof_supported_nr_bands; k++) {
+          irat_params_nr_r15.supported_band_list_en_dc_r15[k].band_nr_r15 = args.supported_bands_nr[k];
+        }
 
-        irat_params_nr_r15.supported_band_list_en_dc_r15.push_back(supported_band_nr_r15);
         ue_eutra_cap_v1450_ies->non_crit_ext.non_crit_ext.irat_params_nr_r15_present = true;
         ue_eutra_cap_v1450_ies->non_crit_ext.non_crit_ext.irat_params_nr_r15         = irat_params_nr_r15;
+        ue_eutra_cap_v1450_ies->non_crit_ext.non_crit_ext.non_crit_ext_present       = true;
+
+        // 15.10
+        ue_eutra_cap_v1510_ies_s* ue_cap_enquiry_v1510_ies   = &ue_eutra_cap_v1450_ies->non_crit_ext.non_crit_ext;
+        ue_cap_enquiry_v1510_ies->pdcp_params_nr_r15_present = true;
+        ue_cap_enquiry_v1510_ies->pdcp_params_nr_r15.sn_size_lo_r15_present = true;
       }
 
       // Pack caps and copy to cap info
       uint8_t       buf[64] = {};
       asn1::bit_ref bref(buf, sizeof(buf));
-      cap.pack(bref);
+      if (cap.pack(bref) != asn1::SRSASN_SUCCESS) {
+        logger.error("Error packing EUTRA capabilities");
+        return;
+      }
       bref.align_bytes_zero();
       auto cap_len = (uint32_t)bref.distance_bytes(buf);
       info->ue_cap_rat_container_list[rat_idx].ue_cap_rat_container.resize(cap_len);
       memcpy(info->ue_cap_rat_container_list[rat_idx].ue_cap_rat_container.data(), buf, cap_len);
       rat_idx++;
-
     } else if (enquiry.crit_exts.c1().ue_cap_enquiry_r8().ue_cap_request[i] == rat_type_e::eutra_nr && has_nr_dc()) {
       info->ue_cap_rat_container_list[rat_idx] = get_eutra_nr_capabilities();
       logger.info("Including EUTRA-NR capabilities in UE Capability Info (%d B)",
@@ -2122,6 +2241,42 @@ void rrc::handle_ue_capability_enquiry(const ue_cap_enquiry_s& enquiry)
         }
       }
     }
+  }
+
+  send_ul_dcch_msg(srb_to_lcid(lte_srb::srb1), ul_dcch_msg);
+}
+
+/*******************************************************************************
+ *
+ *
+ *
+ * UEInformationRequest message
+ *
+ *
+ *
+ *******************************************************************************/
+void rrc::handle_ue_info_request(const ue_info_request_r9_s& request)
+{
+  logger.debug("Preparing UEInformationResponse message");
+
+  ul_dcch_msg_s          ul_dcch_msg;
+  ue_info_resp_r9_ies_s* resp =
+      &ul_dcch_msg.msg.set_c1().set_ue_info_resp_r9().crit_exts.set_c1().set_ue_info_resp_r9();
+  ul_dcch_msg.msg.c1().ue_info_resp_r9().rrc_transaction_id = transaction_id;
+
+  // if rach-ReportReq is set to true, set the contents of the rach-Report in the UEInformationResponse message as
+  // follows
+  if (request.crit_exts.c1().ue_info_request_r9().rach_report_req_r9) {
+    // todo...
+  }
+
+  // Include rlf-Report if rlf-ReportReq is set to true
+  if (request.crit_exts.c1().ue_info_request_r9().rlf_report_req_r9 && var_rlf_report.has_info()) {
+    resp->rlf_report_r9_present = true;
+    resp->rlf_report_r9         = var_rlf_report.get_report();
+
+    // fixme: should be cleared upon successful delivery
+    var_rlf_report.clear();
   }
 
   send_ul_dcch_msg(srb_to_lcid(lte_srb::srb1), ul_dcch_msg);
@@ -2337,6 +2492,8 @@ void rrc::apply_phy_scell_config(const scell_to_add_mod_r10_s& scell_config, boo
     logger.error("Adding SCell cc_idx=%d", scell_config.scell_idx_r10);
   } else if (!phy_ctrl->set_cell_config(scell_cfg, scell_config.scell_idx_r10)) {
     logger.error("Setting SCell configuration for cc_idx=%d", scell_config.scell_idx_r10);
+  } else {
+    meas_cells.set_scell_cc_idx(scell_config.scell_idx_r10, earfcn, scell.id);
   }
 }
 
@@ -2539,16 +2696,12 @@ void rrc::handle_con_setup(const rrc_conn_setup_s& setup)
   t302.stop();
   srsran::console("RRC Connected\n");
 
-  // Apply the Radio Resource configuration
-  apply_rr_config_dedicated(&setup.crit_exts.c1().rrc_conn_setup_r8().rr_cfg_ded);
-
-  nas->set_barring(srsran::barring_t::none);
-
-  if (dedicated_info_nas.get()) {
-    send_con_setup_complete(std::move(dedicated_info_nas));
-  } else {
-    logger.error("Pending to transmit a ConnectionSetupComplete but no dedicatedInfoNAS was in queue");
+  // defer transmission of Setup Complete until PHY reconfiguration has been completed
+  if (not conn_setup_proc.launch(&setup.crit_exts.c1().rrc_conn_setup_r8().rr_cfg_ded, std::move(dedicated_info_nas))) {
+    logger.error("Failed to initiate connection setup procedure");
+    return;
   }
+  callback_list.add_proc(conn_setup_proc);
 }
 
 /* Reception of RRCConnectionReestablishment by the UE 5.3.7.5 */
@@ -2660,23 +2813,55 @@ void rrc::add_drb(const drb_to_add_mod_s& drb_cnfg)
   }
   mac->setup_lcid(lcid, log_chan_group, priority, prioritized_bit_rate, bucket_size_duration);
 
-  drbs[drb_cnfg.drb_id] = drb_cnfg;
-  drb_up                = true;
-  logger.info("Added DRB Id %d (LCID=%d)", drb_cnfg.drb_id, lcid);
-  // Update LCID if gw is running
-  if (gw->is_running()) {
-    gw->update_lcid(drb_cnfg.eps_bearer_id, lcid);
+  uint8_t eps_bearer_id = 5; // default?
+  if (drb_cnfg.eps_bearer_id_present) {
+    eps_bearer_id = drb_cnfg.eps_bearer_id;
   }
+
+  // register EPS bearer over LTE PDCP
+  stack->add_eps_bearer(eps_bearer_id, srsran::srsran_rat_t::lte, lcid);
+
+  drbs[drb_cnfg.drb_id] = drb_cnfg;
+  logger.info("Added DRB Id %d (LCID=%d)", drb_cnfg.drb_id, lcid);
 }
 
 void rrc::release_drb(uint32_t drb_id)
 {
   if (drbs.find(drb_id) != drbs.end()) {
     logger.info("Releasing DRB Id %d", drb_id);
+
+    // remvove RLC and PDCP for this LCID
+    uint32_t lcid = get_lcid_for_drb_id(drb_id);
+    rlc->del_bearer(lcid);
+    pdcp->del_bearer(lcid);
+    // TODO: implement bearer removal at MAC
+
+    // remove EPS bearer associated with this DRB from Stack (GW will trigger service request if needed)
+    stack->remove_eps_bearer(get_eps_bearer_id_for_drb_id(drb_id));
     drbs.erase(drb_id);
   } else {
     logger.error("Couldn't release DRB Id %d. Doesn't exist.", drb_id);
   }
+}
+
+/**
+ * @brief check if this DRB id exists and return it's LCID
+ *
+ * if the DRB couldn't be found, 0 is returned. This is an invalid
+ * LCID for DRB and the caller should handle it.
+ */
+uint32_t rrc::get_lcid_for_drb_id(const uint32_t& drb_id)
+{
+  uint32_t lcid = 0;
+  if (drbs.find(drb_id) != drbs.end()) {
+    asn1::rrc::drb_to_add_mod_s drb_cnfg = drbs[drb_id];
+    if (drb_cnfg.lc_ch_id_present) {
+      lcid = drb_cnfg.lc_ch_id;
+    } else {
+      lcid = srsran::MAX_LTE_SRB_ID + drb_cnfg.drb_id;
+    }
+  }
+  return lcid;
 }
 
 uint32_t rrc::get_lcid_for_eps_bearer(const uint32_t& eps_bearer_id)
@@ -2695,6 +2880,17 @@ uint32_t rrc::get_lcid_for_eps_bearer(const uint32_t& eps_bearer_id)
   return lcid;
 }
 
+uint32_t rrc::get_eps_bearer_id_for_drb_id(const uint32_t& drb_id)
+{
+  // check if this bearer id exists and return it's LCID
+  for (auto& drb : drbs) {
+    if (drb.first == drb_id) {
+      return drb.second.eps_bearer_id;
+    }
+  }
+  return 0;
+}
+
 uint32_t rrc::get_drb_id_for_eps_bearer(const uint32_t& eps_bearer_id)
 {
   // check if this bearer id exists and return it's LCID
@@ -2708,10 +2904,7 @@ uint32_t rrc::get_drb_id_for_eps_bearer(const uint32_t& eps_bearer_id)
 
 bool rrc::has_nr_dc()
 {
-  bool has_nr_dc = false;
-  if (args.release >= 15)
-    has_nr_dc = true;
-  return has_nr_dc;
+  return (args.release >= 15);
 }
 
 void rrc::add_mrb(uint32_t lcid, uint32_t port)

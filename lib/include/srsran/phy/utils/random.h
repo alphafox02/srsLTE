@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -47,6 +47,10 @@ srsran_random_uniform_complex_dist_vector(srsran_random_t q, cf_t* vector, uint3
 SRSRAN_API float srsran_random_gauss_dist(srsran_random_t q, float std_dev);
 
 SRSRAN_API bool srsran_random_bool(srsran_random_t q, float prob_true);
+
+SRSRAN_API void srsran_random_byte_vector(srsran_random_t q, uint8_t* c, uint32_t nsamples);
+
+SRSRAN_API void srsran_random_bit_vector(srsran_random_t q, uint8_t* c, uint32_t nsamples);
 
 SRSRAN_API void srsran_random_free(srsran_random_t q);
 

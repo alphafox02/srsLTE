@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -62,7 +62,8 @@ SRSRAN_API int srsran_softbuffer_rx_init(srsran_softbuffer_rx_t* q, uint32_t nof
  * @param q The Rx soft-buffer pointer
  * @param max_cb The maximum number of code blocks to allocate
  * @param max_cb_size The code block size to allocate
- * @return It returns SRSRAN_SUCCESS if it allocates the soft-buffer succesfully, otherwise it returns SRSRAN_ERROR code
+ * @return It returns SRSRAN_SUCCESS if it allocates the soft-buffer successfully, otherwise it returns SRSRAN_ERROR
+ * code
  */
 SRSRAN_API int srsran_softbuffer_rx_init_guru(srsran_softbuffer_rx_t* q, uint32_t max_cb, uint32_t max_cb_size);
 
@@ -74,6 +75,15 @@ SRSRAN_API void srsran_softbuffer_rx_reset_cb(srsran_softbuffer_rx_t* q, uint32_
 
 SRSRAN_API void srsran_softbuffer_rx_free(srsran_softbuffer_rx_t* p);
 
+/**
+ * @brief Resets a number of CB CRCs
+ * @note This function is intended to be used if all CB CRC have matched but the TB CRC failed. In this case, all CB
+ * should be decoded again
+ * @param q Rx soft-buffer object
+ * @param nof_cb Number of CB to reset
+ */
+SRSRAN_API void srsran_softbuffer_rx_reset_cb_crc(srsran_softbuffer_rx_t* q, uint32_t nof_cb);
+
 SRSRAN_API int srsran_softbuffer_tx_init(srsran_softbuffer_tx_t* q, uint32_t nof_prb);
 
 /**
@@ -81,7 +91,8 @@ SRSRAN_API int srsran_softbuffer_tx_init(srsran_softbuffer_tx_t* q, uint32_t nof
  * @param q The Tx soft-buffer pointer
  * @param max_cb The maximum number of code blocks to allocate
  * @param max_cb_size The code block size to allocate
- * @return It returns SRSRAN_SUCCESS if it allocates the soft-buffer succesfully, otherwise it returns SRSRAN_ERROR code
+ * @return It returns SRSRAN_SUCCESS if it allocates the soft-buffer successfully, otherwise it returns SRSRAN_ERROR
+ * code
  */
 SRSRAN_API int srsran_softbuffer_tx_init_guru(srsran_softbuffer_tx_t* q, uint32_t max_cb, uint32_t max_cb_size);
 

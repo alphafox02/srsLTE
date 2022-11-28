@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -23,11 +23,6 @@
 #include "srsran/srslog/context.h"
 
 using namespace srsenb;
-
-void metrics_json::set_handle(enb_metrics_interface* enb_)
-{
-  enb = enb_;
-}
 
 namespace {
 
@@ -59,6 +54,13 @@ DECLARE_METRIC("dl_bitrate", metric_dl_bitrate, float, "");
 DECLARE_METRIC("dl_bler", metric_dl_bler, float, "");
 DECLARE_METRIC("ul_snr", metric_ul_snr, float, "");
 DECLARE_METRIC("ul_mcs", metric_ul_mcs, float, "");
+DECLARE_METRIC("ul_pusch_rssi", metric_ul_pusch_rssi, float, "");
+DECLARE_METRIC("ul_pucch_rssi", metric_ul_pucch_rssi, float, "");
+DECLARE_METRIC("ul_pucch_ni", metric_ul_pucch_ni, float, "");
+DECLARE_METRIC("ul_pusch_tpc", metric_ul_pusch_tpc, int64_t, "");
+DECLARE_METRIC("ul_pucch_tpc", metric_ul_pucch_tpc, int64_t, "");
+DECLARE_METRIC("dl_cqi_offset", metric_dl_cqi_offset, float, "");
+DECLARE_METRIC("ul_snr_offset", metric_ul_snr_offset, float, "");
 DECLARE_METRIC("ul_bitrate", metric_ul_bitrate, float, "");
 DECLARE_METRIC("ul_bler", metric_ul_bler, float, "");
 DECLARE_METRIC("ul_phr", metric_ul_phr, float, "");
@@ -69,6 +71,13 @@ DECLARE_METRIC_SET("ue_container",
                    metric_ue_rnti,
                    metric_dl_cqi,
                    metric_dl_mcs,
+                   metric_ul_pusch_rssi,
+                   metric_ul_pucch_rssi,
+                   metric_ul_pucch_ni,
+                   metric_ul_pusch_tpc,
+                   metric_ul_pucch_tpc,
+                   metric_dl_cqi_offset,
+                   metric_ul_snr_offset,
                    metric_dl_bitrate,
                    metric_dl_bler,
                    metric_ul_snr,
@@ -79,19 +88,20 @@ DECLARE_METRIC_SET("ue_container",
                    metric_bsr,
                    mlist_bearers);
 
-/// Sector container metrics.
-DECLARE_METRIC("sector_id", metric_sector_id, uint32_t, "");
-DECLARE_METRIC("sector_rach", metric_sector_rach, uint32_t, "");
+/// Cell container metrics.
+DECLARE_METRIC("carrier_id", metric_carrier_id, uint32_t, "");
+DECLARE_METRIC("pci", metric_pci, uint32_t, "");
+DECLARE_METRIC("nof_rach", metric_nof_rach, uint32_t, "");
 DECLARE_METRIC_LIST("ue_list", mlist_ues, std::vector<mset_ue_container>);
-DECLARE_METRIC_SET("sector_container", mset_sector_container, metric_sector_id, metric_sector_rach, mlist_ues);
+DECLARE_METRIC_SET("cell_container", mset_cell_container, metric_carrier_id, metric_pci, metric_nof_rach, mlist_ues);
 
 /// Metrics root object.
 DECLARE_METRIC("type", metric_type_tag, std::string, "");
 DECLARE_METRIC("timestamp", metric_timestamp_tag, double, "");
-DECLARE_METRIC_LIST("sector_list", mlist_sector, std::vector<mset_sector_container>);
+DECLARE_METRIC_LIST("cell_list", mlist_cell, std::vector<mset_cell_container>);
 
 /// Metrics context.
-using metric_context_t = srslog::build_context_type<metric_type_tag, metric_timestamp_tag, mlist_sector>;
+using metric_context_t = srslog::build_context_type<metric_type_tag, metric_timestamp_tag, mlist_cell>;
 
 } // namespace
 
@@ -101,24 +111,40 @@ static void fill_ue_metrics(mset_ue_container& ue, const enb_metrics_t& m, unsig
   ue.write<metric_ue_rnti>(m.stack.mac.ues[i].rnti);
   ue.write<metric_dl_cqi>(std::max(0.1f, m.stack.mac.ues[i].dl_cqi));
   if (!std::isnan(m.phy[i].dl.mcs)) {
-    ue.write<metric_dl_mcs>(std::max(0.1f, m.phy[i].dl.mcs));
+    ue.write<metric_dl_mcs>(m.phy[i].dl.mcs);
   }
-  if (m.stack.mac.ues[i].tx_brate > 0) {
+  if (m.stack.mac.ues[i].tx_brate > 0 && m.stack.mac.ues[i].nof_tti > 0) {
     ue.write<metric_dl_bitrate>(
         std::max(0.1f, (float)m.stack.mac.ues[i].tx_brate / (m.stack.mac.ues[i].nof_tti * 0.001f)));
   }
   if (m.stack.mac.ues[i].tx_pkts > 0 && m.stack.mac.ues[i].tx_errors > 0) {
-    ue.write<metric_dl_bler>(std::max(0.1f, (float)100 * m.stack.mac.ues[i].tx_errors / m.stack.mac.ues[i].tx_pkts));
+    ue.write<metric_dl_bler>((float)100 * m.stack.mac.ues[i].tx_errors / m.stack.mac.ues[i].tx_pkts);
   }
   if (!std::isnan(m.phy[i].ul.pusch_sinr)) {
-    ue.write<metric_ul_snr>(std::max(0.1f, m.phy[i].ul.pusch_sinr));
+    ue.write<metric_ul_snr>(m.phy[i].ul.pusch_sinr);
+  }
+  if (!std::isnan(m.phy[i].ul.pusch_rssi)) {
+    ue.write<metric_ul_pusch_rssi>(m.phy[i].ul.pusch_rssi);
+  }
+  if (!std::isnan(m.phy[i].ul.pucch_rssi)) {
+    ue.write<metric_ul_pucch_rssi>(m.phy[i].ul.pucch_rssi);
+  }
+  if (!std::isnan(m.phy[i].ul.pucch_ni)) {
+    ue.write<metric_ul_pucch_ni>(m.phy[i].ul.pucch_ni);
+  }
+  ue.write<metric_ul_pusch_tpc>(m.phy[i].ul.pusch_tpc);
+  ue.write<metric_ul_pucch_tpc>(m.phy[i].dl.pucch_tpc);
+  if (!std::isnan(m.stack.mac.ues[i].dl_cqi_offset)) {
+    ue.write<metric_dl_cqi_offset>(m.stack.mac.ues[i].dl_cqi_offset);
+  }
+  if (!std::isnan(m.stack.mac.ues[i].ul_snr_offset)) {
+    ue.write<metric_ul_snr_offset>(m.stack.mac.ues[i].ul_snr_offset);
   }
   if (!std::isnan(m.phy[i].ul.mcs)) {
-    ue.write<metric_ul_mcs>(std::max(0.1f, m.phy[i].ul.mcs));
+    ue.write<metric_ul_mcs>(m.phy[i].ul.mcs);
   }
-  if (m.stack.mac.ues[i].rx_brate > 0) {
-    ue.write<metric_ul_bitrate>(
-        std::max(0.1f, (float)m.stack.mac.ues[i].rx_brate / (m.stack.mac.ues[i].nof_tti * 0.001f)));
+  if (m.stack.mac.ues[i].rx_brate > 0 && m.stack.mac.ues[i].nof_tti > 0) {
+    ue.write<metric_ul_bitrate>((float)m.stack.mac.ues[i].rx_brate / (m.stack.mac.ues[i].nof_tti * 0.001f));
   }
   if (m.stack.mac.ues[i].rx_pkts > 0 && m.stack.mac.ues[i].rx_errors > 0) {
     ue.write<metric_ul_bler>(std::max(0.1f, (float)100 * m.stack.mac.ues[i].rx_errors / m.stack.mac.ues[i].rx_pkts));
@@ -179,7 +205,7 @@ void metrics_json::set_metrics(const enb_metrics_t& m, const uint32_t period_use
   if (!enb) {
     return;
   }
-  if (m.stack.mac.cc_rach_counter.empty()) {
+  if (m.stack.mac.cc_info.empty()) {
     return;
   }
 
@@ -187,27 +213,28 @@ void metrics_json::set_metrics(const enb_metrics_t& m, const uint32_t period_use
 
   // Fill root object.
   ctx.write<metric_type_tag>("metrics");
-  auto& sector_list = ctx.get<mlist_sector>();
-  sector_list.resize(m.stack.mac.cc_rach_counter.size());
+  auto& cell_list = ctx.get<mlist_cell>();
+  cell_list.resize(m.stack.mac.cc_info.size());
 
-  // For each sector...
-  for (unsigned cc_idx = 0, e = sector_list.size(); cc_idx != e; ++cc_idx) {
-    auto& sector = sector_list[cc_idx];
-    sector.write<metric_sector_id>(cc_idx);
-    sector.write<metric_sector_rach>(m.stack.mac.cc_rach_counter[cc_idx]);
+  // For each cell...
+  for (unsigned cc_idx = 0, e = cell_list.size(); cc_idx != e; ++cc_idx) {
+    auto& cell = cell_list[cc_idx];
+    cell.write<metric_carrier_id>(cc_idx);
+    cell.write<metric_nof_rach>(m.stack.mac.cc_info[cc_idx].cc_rach_counter);
+    cell.write<metric_pci>(m.stack.mac.cc_info[cc_idx].pci);
 
-    // For each UE in this sector...
+    // For each UE in this cell...
     for (unsigned i = 0; i != m.stack.rrc.ues.size(); ++i) {
       if (!has_valid_metric_ranges(m, i)) {
         continue;
       }
 
-      // Only record UEs that belong to this sector.
+      // Only record UEs that belong to this cell.
       if (m.stack.mac.ues[i].cc_idx != cc_idx) {
         continue;
       }
-      sector.get<mlist_ues>().emplace_back();
-      fill_ue_metrics(sector.get<mlist_ues>().back(), m, i);
+      cell.get<mlist_ues>().emplace_back();
+      fill_ue_metrics(cell.get<mlist_ues>().back(), m, i);
     }
   }
 

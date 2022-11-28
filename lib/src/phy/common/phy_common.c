@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -347,9 +347,9 @@ int srsran_symbol_sz_power2(uint32_t nof_prb)
     return 256;
   } else if (nof_prb <= 25) {
     return 512;
-  } else if (nof_prb <= 50) {
+  } else if (nof_prb <= 52) {
     return 1024;
-  } else if (nof_prb <= 75) {
+  } else if (nof_prb <= 79) {
     return 1536;
   } else if (nof_prb <= 110) {
     return 2048;
@@ -370,9 +370,9 @@ int srsran_symbol_sz(uint32_t nof_prb)
       return 256;
     } else if (nof_prb <= 25) {
       return 384;
-    } else if (nof_prb <= 50) {
+    } else if (nof_prb <= 52) {
       return 768;
-    } else if (nof_prb <= 75) {
+    } else if (nof_prb <= 79) {
       return 1024;
     } else if (nof_prb <= 110) {
       return 1536;
@@ -662,6 +662,7 @@ uint8_t srsran_band_get_band(uint32_t dl_earfcn)
   uint32_t i = SRSRAN_NOF_LTE_BANDS - 1;
   if (dl_earfcn > lte_bands[i].dl_earfcn_offset) {
     ERROR("Invalid DL_EARFCN=%d", dl_earfcn);
+    return 0;
   }
   i--;
   while (i > 0 && lte_bands[i].dl_earfcn_offset > dl_earfcn) {
@@ -675,6 +676,7 @@ double srsran_band_fd(uint32_t dl_earfcn)
   uint32_t i = SRSRAN_NOF_LTE_BANDS - 1;
   if (dl_earfcn > lte_bands[i].dl_earfcn_offset) {
     ERROR("Invalid DL_EARFCN=%d", dl_earfcn);
+    return 0;
   }
   i--;
   while (i > 0 && lte_bands[i].dl_earfcn_offset > dl_earfcn) {
@@ -688,6 +690,7 @@ double srsran_band_fu(uint32_t ul_earfcn)
   uint32_t i = SRSRAN_NOF_LTE_BANDS - 1;
   if (ul_earfcn > lte_bands[i].ul_earfcn_offset) {
     ERROR("Invalid UL_EARFCN=%d", ul_earfcn);
+    return 0;
   }
   i--;
   while (i > 0 && (lte_bands[i].ul_earfcn_offset > ul_earfcn || lte_bands[i].ul_earfcn_offset == 0)) {
@@ -701,6 +704,7 @@ uint32_t srsran_band_ul_earfcn(uint32_t dl_earfcn)
   uint32_t i = SRSRAN_NOF_LTE_BANDS - 1;
   if (dl_earfcn > lte_bands[i].dl_earfcn_offset) {
     ERROR("Invalid DL_EARFCN=%d", dl_earfcn);
+    return 0;
   }
   i--;
   while (i > 0 && lte_bands[i].dl_earfcn_offset > dl_earfcn) {

@@ -1,5 +1,5 @@
 #
-# Copyright 2013-2021 Software Radio Systems Limited
+# Copyright 2013-2022 Software Radio Systems Limited
 #
 # This file is part of srsRAN
 #
@@ -21,7 +21,7 @@
 set(CTEST_LABELS "lib;phy;phch")
 
 ########################################################################
-# PBCH TEST  
+# PBCH TEST
 ########################################################################
 
 add_executable(pbch_test pbch_test.c)
@@ -57,15 +57,15 @@ add_executable(psbch_file_test psbch_file_test.c)
 target_link_libraries(psbch_file_test srsran_phy)
 
 # TM2 file tests
-add_lte_test(psbch_file_test_ideal_tm2_p6_c0 psbch_file_test -p 6 -c 0 -d -i ${CMAKE_HOME_DIRECTORY}/lib/src/phy/phch/test/signal_sidelink_ideal_tm2_p6_c0_s1.92e6.dat)
-add_lte_test(psbch_file_test_ideal_tm2_p15_c84 psbch_file_test -p 15 -c 84 -d -i ${CMAKE_HOME_DIRECTORY}/lib/src/phy/phch/test/signal_sidelink_ideal_tm2_p15_c84_s3.84e6.dat)
-add_lte_test(psbch_file_test_ideal_tm2_p25_c168 psbch_file_test -p 25 -c 168 -d -i ${CMAKE_HOME_DIRECTORY}/lib/src/phy/phch/test/signal_sidelink_ideal_tm2_p25_c168_s7.68e6.dat)
-add_lte_test(psbch_file_test_ideal_tm2_p50_c252 psbch_file_test -p 50 -c 252 -d -i ${CMAKE_HOME_DIRECTORY}/lib/src/phy/phch/test/signal_sidelink_ideal_tm2_p50_c252_s15.36e6.dat)
-add_lte_test(psbch_file_test_ideal_tm2_p100_c335 psbch_file_test -p 100 -c 335 -d -i ${CMAKE_HOME_DIRECTORY}/lib/src/phy/phch/test/signal_sidelink_ideal_tm2_p100_c335_s30.72e6.dat)
-add_lte_test(psbch_file_test_ideal_tm2_p50_c252_ext psbch_file_test -p 50 -c 252 -e -d -i ${CMAKE_HOME_DIRECTORY}/lib/src/phy/phch/test/signal_sidelink_ideal_tm2_p50_c252_s15.36e6_ext.dat)
+add_lte_test(psbch_file_test_ideal_tm2_p6_c0 psbch_file_test -p 6 -c 0 -d -i ${CMAKE_CURRENT_SOURCE_DIR}/signal_sidelink_ideal_tm2_p6_c0_s1.92e6.dat)
+add_lte_test(psbch_file_test_ideal_tm2_p15_c84 psbch_file_test -p 15 -c 84 -d -i ${CMAKE_CURRENT_SOURCE_DIR}/signal_sidelink_ideal_tm2_p15_c84_s3.84e6.dat)
+add_lte_test(psbch_file_test_ideal_tm2_p25_c168 psbch_file_test -p 25 -c 168 -d -i ${CMAKE_CURRENT_SOURCE_DIR}/signal_sidelink_ideal_tm2_p25_c168_s7.68e6.dat)
+add_lte_test(psbch_file_test_ideal_tm2_p50_c252 psbch_file_test -p 50 -c 252 -d -i ${CMAKE_CURRENT_SOURCE_DIR}/signal_sidelink_ideal_tm2_p50_c252_s15.36e6.dat)
+add_lte_test(psbch_file_test_ideal_tm2_p100_c335 psbch_file_test -p 100 -c 335 -d -i ${CMAKE_CURRENT_SOURCE_DIR}/signal_sidelink_ideal_tm2_p100_c335_s30.72e6.dat)
+add_lte_test(psbch_file_test_ideal_tm2_p50_c252_ext psbch_file_test -p 50 -c 252 -e -d -i ${CMAKE_CURRENT_SOURCE_DIR}/signal_sidelink_ideal_tm2_p50_c252_s15.36e6_ext.dat)
 
 # TM4 file tests
-add_lte_test(psbch_file_test_cmw_tm4_p50_c169 psbch_file_test -p 50 -c 169 -t 4 -i ${CMAKE_HOME_DIRECTORY}/lib/src/phy/phch/test/signal_sidelink_cmw500_f5.92e9_s11.52e6_50prb_slss_id169.dat)
+add_lte_test(psbch_file_test_cmw_tm4_p50_c169 psbch_file_test -p 50 -c 169 -t 4 -i ${CMAKE_CURRENT_SOURCE_DIR}/signal_sidelink_cmw500_f5.92e9_s11.52e6_50prb_slss_id169.dat)
 
 ########################################################################
 # PSCCH TEST
@@ -123,38 +123,38 @@ add_executable(pssch_pscch_file_test pssch_pscch_file_test.c)
 target_link_libraries(pssch_pscch_file_test srsran_phy)
 
 # TM2 file tests
-add_lte_test(pssch_pscch_file_test_ideal_tm2_p100 pssch_pscch_file_test -p 100 -d -i ${CMAKE_HOME_DIRECTORY}/lib/src/phy/phch/test/signal_sidelink_ideal_tm2_p100_c335_s30.72e6.dat)
-set_property(TEST pssch_pscch_file_test_ideal_tm2_p100 PROPERTY PASS_REGULAR_EXPRESSION "num_decoded_sci=2 num_decoded_tb=1")
+add_lte_test(pssch_pscch_file_test_ideal_tm2_p100 pssch_pscch_file_test -p 100 -d -i ${CMAKE_CURRENT_SOURCE_DIR}/signal_sidelink_ideal_tm2_p100_c335_s30.72e6.dat)
+set_property(TEST pssch_pscch_file_test_ideal_tm2_p100 PROPERTY PASS_REGULAR_EXPRESSION "num_decoded_sci=[2,3] num_decoded_tb=1")
 
 # TM4 file tests (first SF is sf_idx = 6 such that the PSSCH sf_idx=0)
-add_lte_test(pssch_pscch_file_test_ideal_tm4_p100 pssch_pscch_file_test -p 100 -t 4 -s 10 -n 10 -d -m 6 -i ${CMAKE_HOME_DIRECTORY}/lib/src/phy/phch/test/signal_sidelink_ideal_tm4_p100_c335_size10_num10_cshift0_s30.72e6.dat)
+add_lte_test(pssch_pscch_file_test_ideal_tm4_p100 pssch_pscch_file_test -p 100 -t 4 -s 10 -n 10 -d -m 6 -i ${CMAKE_CURRENT_SOURCE_DIR}/signal_sidelink_ideal_tm4_p100_c335_size10_num10_cshift0_s30.72e6.dat)
 set_property(TEST pssch_pscch_file_test_ideal_tm4_p100 PROPERTY PASS_REGULAR_EXPRESSION "num_decoded_sci=1")
 
-add_lte_test(pssch_pscch_test_tm4_p50_qc pssch_pscch_file_test -p 50 -t 4 -d -i ${CMAKE_HOME_DIRECTORY}/lib/src/phy/phch/test/signal_sidelink_qc9150_f5.92e9_s15.36e6_50prb_20offset.dat)
+add_lte_test(pssch_pscch_test_tm4_p50_qc pssch_pscch_file_test -p 50 -t 4 -d -i ${CMAKE_CURRENT_SOURCE_DIR}/signal_sidelink_qc9150_f5.92e9_s15.36e6_50prb_20offset.dat)
 set_property(TEST pssch_pscch_test_tm4_p50_qc PROPERTY PASS_REGULAR_EXPRESSION "num_decoded_sci=1 num_decoded_tb=1")
 
 # Capture has a SFO offset of ~64 samples, but offsetting by 20 is enough to decode it
-add_lte_test(pssch_pscch_test_tm4_p50_cmw pssch_pscch_file_test -p 50 -t 4 -o 20 -i ${CMAKE_HOME_DIRECTORY}/lib/src/phy/phch/test/signal_sidelink_cmw500_f5.92e9_s11.52e6_50prb_0offset_1ms.dat)
+add_lte_test(pssch_pscch_test_tm4_p50_cmw pssch_pscch_file_test -p 50 -t 4 -o 20 -i ${CMAKE_CURRENT_SOURCE_DIR}/signal_sidelink_cmw500_f5.92e9_s11.52e6_50prb_0offset_1ms.dat)
 set_property(TEST pssch_pscch_test_tm4_p50_cmw PROPERTY PASS_REGULAR_EXPRESSION "num_decoded_sci=1 num_decoded_tb=1")
 
 # With PHY retransmission (3 TTI offset) first SF at sf_idx=5
-add_lte_test(pssch_pscch_test_tm4_p50_huawei pssch_pscch_file_test -p 50 -t 4 -m 5 -i ${CMAKE_HOME_DIRECTORY}/lib/src/phy/phch/test/signal_sidelink_huawei_s11.52e6_50prb_10prb_offset_with_retx.dat)
+add_lte_test(pssch_pscch_test_tm4_p50_huawei pssch_pscch_file_test -p 50 -t 4 -m 5 -i ${CMAKE_CURRENT_SOURCE_DIR}/signal_sidelink_huawei_s11.52e6_50prb_10prb_offset_with_retx.dat)
 set_property(TEST pssch_pscch_test_tm4_p50_huawei PROPERTY PASS_REGULAR_EXPRESSION "num_decoded_sci=2 num_decoded_tb=2")
 
 # With PHY ReTx (0 TTI offset?)
-add_lte_test(pssch_pscch_test_tm4_p50_uxm1 pssch_pscch_file_test -p 50 -d -t 4 -s 5 -n 10 -i ${CMAKE_HOME_DIRECTORY}/lib/src/phy/phch/test/signal_sidelink_uxm_s15.36e6_50prb_0prb_offset_mcs12.dat)
+add_lte_test(pssch_pscch_test_tm4_p50_uxm1 pssch_pscch_file_test -p 50 -d -t 4 -s 5 -n 10 -i ${CMAKE_CURRENT_SOURCE_DIR}/signal_sidelink_uxm_s15.36e6_50prb_0prb_offset_mcs12.dat)
 set_property(TEST pssch_pscch_test_tm4_p50_uxm1 PROPERTY PASS_REGULAR_EXPRESSION "mcs=12.*num_decoded_sci=2 num_decoded_tb=2")
 
 # 100 PRB startOffset 1 MCS12 MAC padding, first SF is index 0
-add_lte_test(pssch_pscch_test_tm4_p100_uxm2 pssch_pscch_file_test -p 100 -t 4 -s 10 -n 10 -i ${CMAKE_HOME_DIRECTORY}/lib/src/phy/phch/test/signal_sidelink_uxm_s23.04e6_100prb_1prb_offset_mcs12_padding.dat)
+add_lte_test(pssch_pscch_test_tm4_p100_uxm2 pssch_pscch_file_test -p 100 -t 4 -s 10 -n 10 -i ${CMAKE_CURRENT_SOURCE_DIR}/signal_sidelink_uxm_s23.04e6_100prb_1prb_offset_mcs12_padding.dat)
 set_property(TEST pssch_pscch_test_tm4_p100_uxm2 PROPERTY PASS_REGULAR_EXPRESSION "mcs=12.*num_decoded_sci=4")
 
 # 100 PRB LTE sampling rate, startOffset1 MCS12 ITS data, first SF is index 6
-add_lte_test(pssch_pscch_test_tm4_p100_uxm3 pssch_pscch_file_test -p 100 -d -t 4 -s 10 -n 10 -m 6 -i ${CMAKE_HOME_DIRECTORY}/lib/src/phy/phch/test/signal_sidelink_uxm_s30.72e6_100prb_1prb_offset_mcs12_its.dat)
+add_lte_test(pssch_pscch_test_tm4_p100_uxm3 pssch_pscch_file_test -p 100 -d -t 4 -s 10 -n 10 -m 6 -i ${CMAKE_CURRENT_SOURCE_DIR}/signal_sidelink_uxm_s30.72e6_100prb_1prb_offset_mcs12_its.dat)
 set_property(TEST pssch_pscch_test_tm4_p100_uxm3 PROPERTY PASS_REGULAR_EXPRESSION "mcs=12.*num_decoded_sci=1")
 
 # 50 PRB LTE sampling rate, startOffset0 MCS28 MAC padding, first SF is index 1
-add_lte_test(pssch_pscch_test_tm4_p50_uxm4 pssch_pscch_file_test -p 50 -d -t 4 -s 5 -n 10 -m 1 -i ${CMAKE_HOME_DIRECTORY}/lib/src/phy/phch/test/signal_sidelink_uxm_s15.36e6_50prb_0prb_offset_mcs28_padding_5ms.dat)
+add_lte_test(pssch_pscch_test_tm4_p50_uxm4 pssch_pscch_file_test -p 50 -d -t 4 -s 5 -n 10 -m 1 -i ${CMAKE_CURRENT_SOURCE_DIR}/signal_sidelink_uxm_s15.36e6_50prb_0prb_offset_mcs28_padding_5ms.dat)
 set_property(TEST pssch_pscch_test_tm4_p50_uxm4 PROPERTY PASS_REGULAR_EXPRESSION "mcs=28.*num_decoded_sci=5")
 
 ########################################################################
@@ -210,19 +210,39 @@ add_lte_test(phich_test_104 phich_test -p 4 -n 10 -e -l -g 1/2)
 add_executable(pdcch_test pdcch_test.c)
 target_link_libraries(pdcch_test srsran_phy)
 
-add_lte_test(pdcch_test_6 pdcch_test -n 6)
-add_lte_test(pdcch_test_15 pdcch_test -n 15)
-add_lte_test(pdcch_test_25 pdcch_test -n 25)
-add_lte_test(pdcch_test_50 pdcch_test -n 50)
-add_lte_test(pdcch_test_75 pdcch_test -n 75)
-add_lte_test(pdcch_test_100 pdcch_test -n 100)
-add_lte_test(pdcch_test_6_mimo pdcch_test -n 6 -p 2)
-add_lte_test(pdcch_test_15_mimo pdcch_test -n 15 -p 2)
-add_lte_test(pdcch_test_25_mimo pdcch_test -n 25 -p 2)
-add_lte_test(pdcch_test_50_mimo pdcch_test -n 50 -p 2)
-add_lte_test(pdcch_test_75_mimo pdcch_test -n 75 -p 2)
-add_lte_test(pdcch_test_100_mimo pdcch_test -n 100 -p 2)
-#add_lte_test(pdcch_test_crosscarrier pdcch_test -x)
+foreach (nof_prb 6 15 25 50 75 100)
+    # Currently, the ARM and SSE platforms srsRAN has been tested are not capable of running 100PRB. So, skip 100 PRB in
+    # ARM and SSE.
+    if ((HAVE_NEON OR NOT HAVE_AVX2) AND (${nof_prb} EQUAL 100))
+        continue()
+    endif ()
+    foreach (nof_ports 1 2)
+        foreach (cfi 1 2 3)
+            foreach (snr auto 15 300)
+                # Build PDCCH test arguments
+                set(pdcch_test_args -n ${nof_prb} -p ${nof_ports} -f ${cfi} -S ${snr} -R 1)
+
+                # The current Viterbi decoder implementation for SSE and NEON does not perform good enough to pass the
+                # test without false detection. So, enable false alarm check in AVX2 based machines only.
+                if (HAVE_AVX2)
+                    set(pdcch_test_args ${pdcch_test_args} -F)
+                endif ()
+
+                string(REGEX REPLACE "\ " "" test_name_args ${pdcch_test_args})
+
+                add_lte_test(pdcch_test${test_name_args} pdcch_test ${pdcch_test_args})
+            endforeach ()
+        endforeach ()
+    endforeach ()
+endforeach ()
+
+########################################################################
+# DCI TEST
+########################################################################
+
+add_executable(dci_test dci_test.c)
+target_link_libraries(dci_test srsran_phy)
+add_test(dci_test dci_test)
 
 ########################################################################
 # PDSCH TEST
@@ -465,11 +485,7 @@ add_lte_test(npdsch_npdcch_dci_formatN1_test npdsch_npdcch_file_test -c 0 -s 1 -
 add_executable(pusch_test pusch_test.c)
 target_link_libraries(pusch_test srsran_phy)
 
-if (NOT DEFINED TEST_EXTENSION)
-  set(TEST_EXTENSION Normal)
-endif(NOT DEFINED TEST_EXTENSION)
-
-if (TEST_EXTENSION STREQUAL Paranoid)
+if (${ENABLE_ALL_TEST})
   # All valid number of PRBs for PUSCH
   set(cell_n_prb_valid 1 2 3 4 5 6 8 9 10 12 15 16 18 20 24 25 27 30 32 36 40 45 48 50 54 60 64 72 75 80 81 90 96 100)
 
@@ -481,7 +497,7 @@ if (TEST_EXTENSION STREQUAL Paranoid)
 
   set(pusch_cqi none wideband)
 
-else (TEST_EXTENSION STREQUAL Paranoid)
+else ()
   set(cell_n_prb_valid 50)
 
   set(pusch_min_mcs 0)
@@ -492,7 +508,7 @@ else (TEST_EXTENSION STREQUAL Paranoid)
 
   set(pusch_cqi none wideband)
 
-endif (TEST_EXTENSION STREQUAL Paranoid)
+endif ()
 
 foreach (cell_n_prb 6 15 25 50 75 100)
   set(pusch_cell_n_prb)
@@ -578,6 +594,8 @@ add_lte_test(prach_zc0 prach_test -z 0)
 add_lte_test(prach_zc2 prach_test -z 2)
 add_lte_test(prach_zc3 prach_test -z 3)
 
+add_nr_test(prach_nr prach_test -n 50 -f 0 -r 0 -z 0 -N 1)
+
 add_executable(prach_test_multi prach_test_multi.c)
 target_link_libraries(prach_test_multi srsran_phy)
 
@@ -624,6 +642,10 @@ if(RF_FOUND)
   target_link_libraries(prach_test_usrp srsran_rf srsran_phy pthread)
 endif(RF_FOUND)
 
+add_executable(prach_nr_test_perf EXCLUDE_FROM_ALL prach_nr_test_perf.c)
+target_link_libraries(prach_nr_test_perf srsran_phy)
+# this is just for performance evaluation, not for unit testing
+
 ########################################################################
 # NR
 ########################################################################
@@ -631,6 +653,10 @@ endif(RF_FOUND)
 add_executable(dci_nr_test dci_nr_test.c)
 target_link_libraries(dci_nr_test srsran_phy)
 add_nr_test(dci_nr_test dci_nr_test)
+
+add_executable(mib_nr_test mib_nr_test.c)
+target_link_libraries(mib_nr_test srsran_phy)
+add_nr_test(mib_nr_test mib_nr_test)
 
 add_executable(pucch_nr_test pucch_nr_test.c)
 target_link_libraries(pucch_nr_test srsran_phy)
@@ -665,7 +691,11 @@ add_nr_test(pusch_nr_ack2_csi4_test pusch_nr_test -p 50 -m 20 -A 2 -C 4)
 add_nr_test(pusch_nr_ack4_csi4_test pusch_nr_test -p 50 -m 20 -A 4 -C 4)
 add_nr_test(pusch_nr_ack20_csi4_test pusch_nr_test -p 50 -m 20 -A 20 -C 4)
 
+add_executable(pusch_nr_bler_test EXCLUDE_FROM_ALL pusch_nr_bler_test.c)
+target_link_libraries(pusch_nr_bler_test srsran_phy)
+# this is just for performance evaluation, not for unit testing
 
 add_executable(pdcch_nr_test pdcch_nr_test.c)
 target_link_libraries(pdcch_nr_test srsran_phy)
-add_nr_test(pdcch_nr_test pdcch_nr_test)
+add_nr_test(pdcch_nr_test_non_interleaved pdcch_nr_test)
+add_nr_test(pdcch_nr_test_interleaved pdcch_nr_test -I)

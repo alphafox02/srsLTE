@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -37,9 +37,10 @@ inline const char* to_string(rrc_cfg_cqi_mode_t mode)
 struct rrc_cfg_cqi_t {
   uint32_t           sf_mapping[80];
   uint32_t           nof_subframes;
-  uint32_t           nof_prb;
   uint32_t           period;
   uint32_t           m_ri;
+  bool               is_subband_enabled;
+  uint32_t           subband_k;
   bool               simultaneousAckCQI;
   rrc_cfg_cqi_mode_t mode;
 };

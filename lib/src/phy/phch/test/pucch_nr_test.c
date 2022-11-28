@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -31,16 +31,7 @@
 #include <strings.h>
 #include <unistd.h>
 
-static srsran_carrier_nr_t carrier = {
-    1,                               // pci
-    0,                               // absolute_frequency_ssb
-    0,                               // absolute_frequency_point_a
-    0,                               // offset_to_carrier
-    srsran_subcarrier_spacing_15kHz, // scs
-    6,                               // nof_prb
-    0,                               // start
-    1                                // max_mimo_layers
-};
+static srsran_carrier_nr_t carrier = SRSRAN_DEFAULT_CARRIER_NR;
 
 static uint32_t              starting_prb_stride    = 4;
 static uint32_t              starting_symbol_stride = 4;
@@ -97,63 +88,71 @@ static int test_pucch_format0(srsran_pucch_nr_t* pucch, const srsran_pucch_nr_co
 static int test_pucch_format1(srsran_pucch_nr_t*                  pucch,
                               const srsran_pucch_nr_common_cfg_t* cfg,
                               srsran_chest_ul_res_t*              chest_res,
-                              cf_t*                               slot_symbols)
+                              cf_t*                               slot_symbols,
+                              bool                                enable_intra_slot_hopping)
 {
   srsran_slot_cfg_t          slot     = {};
   srsran_pucch_nr_resource_t resource = {};
   resource.format                     = SRSRAN_PUCCH_NR_FORMAT_1;
+  resource.intra_slot_hopping         = enable_intra_slot_hopping;
 
   for (slot.idx = 0; slot.idx < SRSRAN_NSLOTS_PER_FRAME_NR(carrier.scs); slot.idx++) {
     for (resource.starting_prb = 0; resource.starting_prb < carrier.nof_prb;
          resource.starting_prb += starting_prb_stride) {
-      for (resource.nof_symbols = SRSRAN_PUCCH_NR_FORMAT1_MIN_NSYMB;
-           resource.nof_symbols <= SRSRAN_PUCCH_NR_FORMAT1_MAX_NSYMB;
-           resource.nof_symbols++) {
-        for (resource.start_symbol_idx = 0;
-             resource.start_symbol_idx <=
-             SRSRAN_MIN(SRSRAN_PUCCH_NR_FORMAT1_MAX_STARTSYMB, SRSRAN_NSYMB_PER_SLOT_NR - resource.nof_symbols);
-             resource.start_symbol_idx += starting_symbol_stride) {
-          for (resource.time_domain_occ = 0; resource.time_domain_occ <= SRSRAN_PUCCH_NR_FORMAT1_MAX_TOCC;
-               resource.time_domain_occ++) {
-            for (resource.initial_cyclic_shift = 0; resource.initial_cyclic_shift <= SRSRAN_PUCCH_NR_FORMAT1_MAX_CS;
-                 resource.initial_cyclic_shift++) {
-              for (uint32_t nof_bits = 1; nof_bits <= SRSRAN_PUCCH_NR_FORMAT1_MAX_NOF_BITS; nof_bits++) {
-                for (uint32_t word = 0; word < (1U << nof_bits); word++) {
-                  // Generate bits
-                  uint8_t b[SRSRAN_PUCCH_NR_FORMAT1_MAX_NOF_BITS] = {};
-                  for (uint32_t i = 0; i < nof_bits; i++) {
-                    b[i] = (word >> i) & 1U;
-                  }
+      for (resource.second_hop_prb = 0; resource.second_hop_prb < (enable_intra_slot_hopping) ? carrier.nof_prb : 0;
+           resource.second_hop_prb += starting_prb_stride) {
+        for (resource.nof_symbols = SRSRAN_PUCCH_NR_FORMAT1_MIN_NSYMB;
+             resource.nof_symbols <= SRSRAN_PUCCH_NR_FORMAT1_MAX_NSYMB;
+             resource.nof_symbols++) {
+          for (resource.start_symbol_idx = 0;
+               resource.start_symbol_idx <=
+               SRSRAN_MIN(SRSRAN_PUCCH_NR_FORMAT1_MAX_STARTSYMB, SRSRAN_NSYMB_PER_SLOT_NR - resource.nof_symbols);
+               resource.start_symbol_idx += starting_symbol_stride) {
+            for (resource.time_domain_occ = 0; resource.time_domain_occ <= SRSRAN_PUCCH_NR_FORMAT1_MAX_TOCC;
+                 resource.time_domain_occ++) {
+              for (resource.initial_cyclic_shift = 0; resource.initial_cyclic_shift <= SRSRAN_PUCCH_NR_FORMAT1_MAX_CS;
+                   resource.initial_cyclic_shift++) {
+                for (uint32_t nof_bits = 1; nof_bits <= SRSRAN_PUCCH_NR_FORMAT1_MAX_NOF_BITS; nof_bits++) {
+                  for (uint32_t word = 0; word < (1U << nof_bits); word++) {
+                    // Generate bits
+                    uint8_t b[SRSRAN_PUCCH_NR_FORMAT1_MAX_NOF_BITS] = {};
+                    for (uint32_t i = 0; i < nof_bits; i++) {
+                      b[i] = (word >> i) & 1U;
+                    }
 
-                  // Encode PUCCH
-                  TESTASSERT(srsran_pucch_nr_format1_encode(pucch, cfg, &slot, &resource, b, nof_bits, slot_symbols) ==
-                             SRSRAN_SUCCESS);
+                    // Encode PUCCH
+                    TESTASSERT(srsran_pucch_nr_format1_encode(
+                                   pucch, cfg, &slot, &resource, b, nof_bits, slot_symbols) == SRSRAN_SUCCESS);
 
-                  // Put DMRS
-                  TESTASSERT(srsran_dmrs_pucch_format1_put(pucch, &carrier, cfg, &slot, &resource, slot_symbols) ==
-                             SRSRAN_SUCCESS);
+                    // Put DMRS
+                    TESTASSERT(srsran_dmrs_pucch_format1_put(pucch, &carrier, cfg, &slot, &resource, slot_symbols) ==
+                               SRSRAN_SUCCESS);
 
-                  // Apply AWGN
-                  srsran_channel_awgn_run_c(
-                      &awgn, slot_symbols, slot_symbols, carrier.nof_prb * SRSRAN_NRE * SRSRAN_NSYMB_PER_SLOT_NR);
+                    // Apply AWGN
+                    srsran_channel_awgn_run_c(
+                        &awgn, slot_symbols, slot_symbols, carrier.nof_prb * SRSRAN_NRE * SRSRAN_NSYMB_PER_SLOT_NR);
 
-                  // Estimate channel
-                  TESTASSERT(srsran_dmrs_pucch_format1_estimate(
-                                 pucch, &carrier, cfg, &slot, &resource, slot_symbols, chest_res) == SRSRAN_SUCCESS);
+                    // Estimate channel
+                    TESTASSERT(srsran_dmrs_pucch_format1_estimate(
+                                   pucch, cfg, &slot, &resource, slot_symbols, chest_res) == SRSRAN_SUCCESS);
 
-                  TESTASSERT(fabsf(chest_res->rsrp_dBfs - 0.0f) < 3.0f);
-                  TESTASSERT(fabsf(chest_res->epre_dBfs - 0.0f) < 3.0f);
-                  TESTASSERT(fabsf(chest_res->snr_db - snr_db) < 10.0f);
+                    TESTASSERT(fabsf(chest_res->rsrp_dBfs - 0.0f) < 3.0f);
+                    TESTASSERT(fabsf(chest_res->epre_dBfs - 0.0f) < 3.0f);
+                    TESTASSERT(fabsf(chest_res->snr_db - snr_db) < 10.0f);
 
-                  // Decode PUCCH
-                  uint8_t b_rx[SRSRAN_PUCCH_NR_FORMAT1_MAX_NOF_BITS];
-                  TESTASSERT(srsran_pucch_nr_format1_decode(
-                                 pucch, cfg, &slot, &resource, chest_res, slot_symbols, b_rx, nof_bits) ==
-                             SRSRAN_SUCCESS);
+                    // Decode PUCCH
+                    uint8_t b_rx[SRSRAN_PUCCH_NR_FORMAT1_MAX_NOF_BITS];
+                    TESTASSERT(srsran_pucch_nr_format1_decode(
+                                   pucch, cfg, &slot, &resource, chest_res, slot_symbols, b_rx, nof_bits, NULL) ==
+                               SRSRAN_SUCCESS);
 
-                  // Check received bits
-                  for (uint32_t i = 0; i < nof_bits; i++) {
-                    TESTASSERT(b[i] == b_rx[i]);
+                    // Check received bits
+                    for (uint32_t i = 0; i < nof_bits; i++) {
+                      if (b[i] != b_rx[i]) {
+                        printf("aaa");
+                      }
+                      TESTASSERT(b[i] == b_rx[i]);
+                    }
                   }
                 }
               }
@@ -186,13 +185,14 @@ static int test_pucch_format2(srsran_pucch_nr_t*                  pucch,
            resource.start_symbol_idx += starting_symbol_stride) {
         srsran_uci_cfg_nr_t uci_cfg = {};
 
-        for (uci_cfg.o_ack = SRSRAN_PUCCH_NR_FORMAT2_MIN_NOF_BITS; uci_cfg.o_ack <= SRSRAN_UCI_NR_MAX_ACK_BITS;
-             uci_cfg.o_ack++) {
+        for (uci_cfg.ack.count = SRSRAN_PUCCH_NR_FORMAT2_MIN_NOF_BITS;
+             uci_cfg.ack.count <= SRSRAN_HARQ_ACK_MAX_NOF_BITS;
+             uci_cfg.ack.count++) {
           srsran_uci_value_nr_t uci_value = {};
 
           // Maximum code rate is reserved
           uint32_t max_code_rate_end = SRSRAN_PUCCH_NR_MAX_CODE_RATE;
-          if (uci_cfg.o_ack == 11) {
+          if (uci_cfg.ack.count == 11) {
             max_code_rate_end = SRSRAN_PUCCH_NR_MAX_CODE_RATE - 1;
           }
 
@@ -207,7 +207,7 @@ static int test_pucch_format2(srsran_pucch_nr_t*                  pucch,
               for (resource.starting_prb = 0; resource.starting_prb < (carrier.nof_prb - resource.nof_prb);
                    resource.starting_prb += starting_prb_stride) {
                 // Generate ACKs
-                for (uint32_t i = 0; i < uci_cfg.o_ack; i++) {
+                for (uint32_t i = 0; i < uci_cfg.ack.count; i++) {
                   uci_value.ack[i] = (uint8_t)srsran_random_uniform_int_dist(random_gen, 0, 1);
                 }
 
@@ -224,8 +224,8 @@ static int test_pucch_format2(srsran_pucch_nr_t*                  pucch,
                     &awgn, slot_symbols, slot_symbols, carrier.nof_prb * SRSRAN_NRE * SRSRAN_NSYMB_PER_SLOT_NR);
 
                 // Estimate channel
-                TESTASSERT(srsran_dmrs_pucch_format2_estimate(
-                               pucch, &carrier, cfg, &slot, &resource, slot_symbols, chest_res) == SRSRAN_SUCCESS);
+                TESTASSERT(srsran_dmrs_pucch_format2_estimate(pucch, cfg, &slot, &resource, slot_symbols, chest_res) ==
+                           SRSRAN_SUCCESS);
                 INFO("RSRP=%+.2f; EPRE=%+.2f; SNR=%+.2f;",
                      chest_res->rsrp_dBfs,
                      chest_res->epre_dBfs,
@@ -243,7 +243,7 @@ static int test_pucch_format2(srsran_pucch_nr_t*                  pucch,
                 TESTASSERT(uci_value_rx.valid == true);
 
                 // Check received ACKs
-                for (uint32_t i = 0; i < uci_cfg.o_ack; i++) {
+                for (uint32_t i = 0; i < uci_cfg.ack.count; i++) {
                   TESTASSERT(uci_value.ack[i] == uci_value_rx.ack[i]);
                 }
               }
@@ -268,6 +268,9 @@ static void usage(char* prog)
 
 static void parse_args(int argc, char** argv)
 {
+  // Limit default number of RB
+  carrier.nof_prb = 6;
+
   int opt;
   while ((opt = getopt(argc, argv, "cnfsv")) != -1) {
     switch (opt) {
@@ -284,7 +287,7 @@ static void parse_args(int argc, char** argv)
         snr_db = strtof(argv[optind], NULL);
         break;
       case 'v':
-        srsran_verbose++;
+        increase_srsran_verbose_level();
         break;
       default:
         usage(argv[0]);
@@ -350,9 +353,13 @@ int main(int argc, char** argv)
     }
   }
 
-  // Test Format 1
+  // Test Format 1 with and without intra slot frequency hopping
   if (format < 0 || format == 1) {
-    if (test_pucch_format1(&pucch, &common_cfg, &chest_res, slot_symb) < SRSRAN_SUCCESS) {
+    if (test_pucch_format1(&pucch, &common_cfg, &chest_res, slot_symb, false) < SRSRAN_SUCCESS) {
+      ERROR("Failed PUCCH format 1");
+      goto clean_exit;
+    }
+    if (test_pucch_format1(&pucch, &common_cfg, &chest_res, slot_symb, true) < SRSRAN_SUCCESS) {
       ERROR("Failed PUCCH format 1");
       goto clean_exit;
     }

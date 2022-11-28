@@ -1,5 +1,5 @@
 /**
- * Copyright 2013-2021 Software Radio Systems Limited
+ * Copyright 2013-2022 Software Radio Systems Limited
  *
  * This file is part of srsRAN.
  *
@@ -45,11 +45,12 @@ public:
 
   explicit search(srslog::basic_logger& logger) : logger(logger) {}
   ~search();
-  void     init(srsran::rf_buffer_t& buffer_, uint32_t nof_rx_channels, search_callback* parent, int force_N_id_2_);
+  void     init(srsran::rf_buffer_t& buffer_, uint32_t nof_rx_channels, search_callback* parent, int force_N_id_2_, int force_N_id_1_);
   void     reset();
   float    get_last_cfo();
   void     set_agc_enable(bool enable);
   ret_code run(srsran_cell_t* cell, std::array<uint8_t, SRSRAN_BCH_PAYLOAD_LEN>& bch_payload);
+  void     set_cp_en(bool enable);
 
 private:
   search_callback*       p = nullptr;
@@ -58,6 +59,7 @@ private:
   srsran_ue_cellsearch_t cs           = {};
   srsran_ue_mib_sync_t   ue_mib_sync  = {};
   int                    force_N_id_2 = 0;
+  int                    force_N_id_1 = 0;
 };
 
 }; // namespace srsue
